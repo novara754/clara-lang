@@ -1,6 +1,9 @@
-use crate::parser::{Literal, ParsedExpression, ParsedProgram, ParsedStatement};
+use crate::{
+    parser::Literal,
+    typechecker::{CheckedExpression, CheckedProgram, CheckedStatement},
+};
 
-pub fn generate_c(w: &mut impl std::io::Write, program: &ParsedProgram) -> std::io::Result<()> {
+pub fn generate_c(w: &mut impl std::io::Write, program: &CheckedProgram) -> std::io::Result<()> {
     writeln!(w, "#include <lib.h>")?;
 
     for func in &program.functions {
@@ -21,16 +24,21 @@ pub fn generate_c(w: &mut impl std::io::Write, program: &ParsedProgram) -> std::
     Ok(())
 }
 
-fn write_stmt(w: &mut impl std::io::Write, stmt: &ParsedStatement) -> std::io::Result<()> {
+fn write_stmt(w: &mut impl std::io::Write, stmt: &CheckedStatement) -> std::io::Result<()> {
     match stmt {
-        ParsedStatement::Expression(expr) => write_expr(w, expr)?,
+        CheckedStatement::Expression(expr) => write_expr(w, expr)?,
+        CheckedStatement::LetAssign(name, expr) => {
+            write!(w, "{} {} = ", expr.ttype().to_c(), name)?;
+            write_expr(w, expr)?;
+        }
     }
     writeln!(w, ";")
 }
 
-fn write_expr(w: &mut impl std::io::Write, expr: &ParsedExpression) -> std::io::Result<()> {
+fn write_expr(w: &mut impl std::io::Write, expr: &CheckedExpression) -> std::io::Result<()> {
+    write!(w, "(")?;
     match expr {
-        ParsedExpression::FunctionCall(func_call) => {
+        CheckedExpression::FunctionCall(func_call) => {
             write!(w, "{}(", func_call.name)?;
             for (i, arg) in func_call.args.iter().enumerate() {
                 if i > 0 {
@@ -38,19 +46,23 @@ fn write_expr(w: &mut impl std::io::Write, expr: &ParsedExpression) -> std::io::
                 }
                 write_expr(w, arg)?;
             }
-            write!(w, ")")
+            write!(w, ")")?;
         }
-        ParsedExpression::Literal(literal) => match literal {
-            Literal::String(string, _) => write!(
-                w,
-                "(StringSlice){{ .data = \"{}\", .length = {} }}",
-                string,
-                string.len()
-            ),
-            Literal::Int(int, _) => write!(w, "{}", int),
+        CheckedExpression::Literal(literal, _type) => match literal {
+            Literal::String(string, _) => {
+                write!(
+                    w,
+                    "(string){{ .data = \"{}\", .length = {} }}",
+                    string,
+                    string.len()
+                )?;
+            }
+            Literal::Int(int, _) => {
+                write!(w, "{}", int)?;
+            }
         },
-        ParsedExpression::Invalid => {
-            panic!();
-        }
+        CheckedExpression::Variable(name, _type) => write!(w, "{}", name)?,
     }
+    write!(w, ")")?;
+    Ok(())
 }

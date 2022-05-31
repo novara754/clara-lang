@@ -10,8 +10,11 @@ pub enum TokenKind {
     StringLiteral(String),
     IntLiteral(i32),
     Ident(String),
+    Opaque,
+    Struct,
     Extern,
     Fn,
+    Let,
     OParen,
     CParen,
     OBrace,
@@ -19,6 +22,9 @@ pub enum TokenKind {
     SemiColon,
     Comma,
     Colon,
+    RightArrow,
+    Equal,
+    Dot,
     Unknown,
 }
 
@@ -31,6 +37,9 @@ impl TokenKind {
             Ident(_) => "identifier",
             Fn => "`fn` keyword",
             Extern => "`extern` keyword",
+            Opaque => "`opaque` keyword",
+            Struct => "`struct` keyword",
+            Let => "`let` keyword",
             OParen => "`(`",
             CParen => "`)`",
             OBrace => "`{`",
@@ -38,6 +47,9 @@ impl TokenKind {
             SemiColon => "`;`",
             Comma => "`,`",
             Colon => "`:`",
+            RightArrow => "`->`",
+            Equal => "`=`",
+            Dot => "`.`",
             Unknown => "unknown token",
         }
     }
@@ -110,7 +122,8 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
         if source[idx].is_ascii_alphabetic() {
             let start = idx;
 
-            while idx < source.len() && source[idx].is_ascii_alphabetic() {
+            while idx < source.len() && (source[idx].is_ascii_alphanumeric() || source[idx] == b'_')
+            {
                 idx += 1;
             }
 
@@ -120,6 +133,9 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             let token = match name {
                 "fn" => Token::new(TokenKind::Fn, start, len),
                 "extern" => Token::new(TokenKind::Extern, start, len),
+                "opaque" => Token::new(TokenKind::Opaque, start, len),
+                "struct" => Token::new(TokenKind::Struct, start, len),
+                "let" => Token::new(TokenKind::Let, start, len),
                 _ => {
                     let name = name.to_owned();
                     Token::new(TokenKind::Ident(name), start, len)
@@ -180,6 +196,11 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             continue;
         }
 
+        let mut unknown_char = |c: char| {
+            tokens.push(Token::new(TokenKind::Unknown, idx, 1));
+            errors.push(LexError::UnknownToken(c, Span::new(idx, 1)));
+        };
+
         match source[idx] {
             b'(' => tokens.push(Token::new(TokenKind::OParen, idx, 1)),
             b')' => tokens.push(Token::new(TokenKind::CParen, idx, 1)),
@@ -188,10 +209,16 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             b';' => tokens.push(Token::new(TokenKind::SemiColon, idx, 1)),
             b',' => tokens.push(Token::new(TokenKind::Comma, idx, 1)),
             b':' => tokens.push(Token::new(TokenKind::Colon, idx, 1)),
-            e => {
-                tokens.push(Token::new(TokenKind::Unknown, idx, 1));
-                errors.push(LexError::UnknownToken(e as char, Span::new(idx, 1)));
-            }
+            b'=' => tokens.push(Token::new(TokenKind::Equal, idx, 1)),
+            b'.' => tokens.push(Token::new(TokenKind::Dot, idx, 1)),
+            b'-' => match source.get(idx + 1) {
+                Some(b'>') => {
+                    tokens.push(Token::new(TokenKind::RightArrow, idx, 2));
+                    idx += 1;
+                }
+                _ => unknown_char('-'),
+            },
+            e => unknown_char(e as char),
         }
 
         idx += 1;

@@ -36,9 +36,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    // dbg!(&program);
-
-    let typecheck_errors = typechecker::typecheck_program(&program);
+    let (checked_program, typecheck_errors) = typechecker::typecheck_program(&program);
 
     for e in &typecheck_errors {
         e.report().print(Source::from(&source)).unwrap();
@@ -65,7 +63,7 @@ fn main() {
 
     let mut output = std::fs::File::create(&c_filepath)
         .expect("should be able to create new file for codegen output");
-    codegen::generate_c(&mut output, &program).unwrap();
+    codegen::generate_c(&mut output, &checked_program).unwrap();
 
     let gcc = PathBuf::from("gcc");
     let gcc_stderr = Command::new(gcc)

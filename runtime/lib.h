@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+typedef char c_char;
+
 /**
  * Reference to a string that does not own its data.
  */
@@ -11,17 +13,25 @@ typedef struct
 {
   char *data;
   size_t length;
-} StringSlice;
+} string;
 
 /**
- * Function to print a StringSlice to stdout.
- * Automatically prints a newline character after the given StringSlice.
+ * Get `->c_char` from a `string`.
  */
-void print(StringSlice string)
+c_char *c_string(string s)
 {
-  for (size_t i = 0; i < string.length; ++i)
+  return s.data;
+}
+
+/**
+ * Function to print a string to stdout.
+ * Automatically prints a newline character after the given string.
+ */
+void print(string msg)
+{
+  for (size_t i = 0; i < msg.length; ++i)
   {
-    putchar(string.data[i]);
+    putchar(msg.data[i]);
   }
   putchar('\n');
 }
