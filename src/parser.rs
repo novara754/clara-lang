@@ -34,8 +34,8 @@ impl ReportError for ParseError {
 
 #[derive(Debug)]
 pub struct ParsedFunctionCall {
-    name: String,
-    args: Vec<ParsedExpression>,
+    pub name: String,
+    pub args: Vec<ParsedExpression>,
 }
 
 #[derive(Debug)]
@@ -57,18 +57,18 @@ pub enum ParsedStatement {
 
 #[derive(Debug)]
 pub struct ParsedBlock {
-    statements: Vec<ParsedStatement>,
+    pub statements: Vec<ParsedStatement>,
 }
 
 #[derive(Debug)]
 pub struct ParsedFunction {
-    name: String,
-    body: ParsedBlock,
+    pub name: String,
+    pub body: ParsedBlock,
 }
 
 #[derive(Debug)]
 pub struct ParsedProgram {
-    functions: Vec<ParsedFunction>,
+    pub functions: Vec<ParsedFunction>,
 }
 
 pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<ParseError>) {
