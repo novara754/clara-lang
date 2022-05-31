@@ -12,6 +12,13 @@ impl Span {
     pub fn new(start: usize, len: usize) -> Self {
         Self { start, len }
     }
+
+    pub fn to(self, other: Self) -> Self {
+        Self {
+            start: self.start,
+            len: other.start - self.start + other.len,
+        }
+    }
 }
 
 impl Spanned for Span {

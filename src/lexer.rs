@@ -8,7 +8,9 @@ use crate::{
 #[derive(Debug)]
 pub enum TokenKind {
     StringLiteral(String),
+    IntLiteral(i32),
     Ident(String),
+    Extern,
     Fn,
     OParen,
     CParen,
@@ -16,6 +18,7 @@ pub enum TokenKind {
     CBrace,
     SemiColon,
     Comma,
+    Colon,
     Unknown,
 }
 
@@ -24,14 +27,17 @@ impl TokenKind {
         use TokenKind::*;
         match *self {
             StringLiteral(_) => "string literal",
+            IntLiteral(_) => "integer literal",
             Ident(_) => "identifier",
             Fn => "`fn` keyword",
+            Extern => "`extern` keyword",
             OParen => "`(`",
             CParen => "`)`",
             OBrace => "`{`",
             CBrace => "`}`",
             SemiColon => "`;`",
             Comma => "`,`",
+            Colon => "`:`",
             Unknown => "unknown token",
         }
     }
@@ -109,11 +115,13 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
 
             let name = std::str::from_utf8(&source[start..idx]).unwrap();
 
+            let len = idx - start;
             let token = match name {
-                "fn" => Token::new(TokenKind::Fn, start, 2),
+                "fn" => Token::new(TokenKind::Fn, start, len),
+                "extern" => Token::new(TokenKind::Extern, start, len),
                 _ => {
                     let name = name.to_owned();
-                    Token::new(TokenKind::Ident(name), start, idx - start)
+                    Token::new(TokenKind::Ident(name), start, len)
                 }
             };
 
@@ -151,6 +159,26 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             continue;
         }
 
+        // Integer literals
+        if source[idx].is_ascii_digit() {
+            let start = idx;
+            while idx < source.len() && source[idx].is_ascii_digit() {
+                idx += 1;
+            }
+
+            let int_value = std::str::from_utf8(&source[start..idx])
+                .unwrap()
+                .parse()
+                .unwrap();
+            tokens.push(Token::new(
+                TokenKind::IntLiteral(int_value),
+                start,
+                idx - start,
+            ));
+
+            continue;
+        }
+
         match source[idx] {
             b'(' => tokens.push(Token::new(TokenKind::OParen, idx, 1)),
             b')' => tokens.push(Token::new(TokenKind::CParen, idx, 1)),
@@ -158,6 +186,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             b'}' => tokens.push(Token::new(TokenKind::CBrace, idx, 1)),
             b';' => tokens.push(Token::new(TokenKind::SemiColon, idx, 1)),
             b',' => tokens.push(Token::new(TokenKind::Comma, idx, 1)),
+            b':' => tokens.push(Token::new(TokenKind::Colon, idx, 1)),
             e => {
                 tokens.push(Token::new(TokenKind::Unknown, idx, 1));
                 errors.push(LexError::UnknownToken(e as char, Span::new(idx, 1)));

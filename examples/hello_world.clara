@@ -1,3 +1,5 @@
+extern fn print(msg: string);
+
 fn main() {
   print("hello, world!");
 }

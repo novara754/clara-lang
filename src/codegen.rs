@@ -41,12 +41,13 @@ fn write_expr(w: &mut impl std::io::Write, expr: &ParsedExpression) -> std::io::
             write!(w, ")")
         }
         ParsedExpression::Literal(literal) => match literal {
-            Literal::String(string) => write!(
+            Literal::String(string, _) => write!(
                 w,
                 "(StringSlice){{ .data = \"{}\", .length = {} }}",
                 string,
                 string.len()
             ),
+            Literal::Int(int, _) => write!(w, "{}", int),
         },
         ParsedExpression::Invalid => {
             panic!();
