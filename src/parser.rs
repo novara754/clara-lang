@@ -17,15 +17,14 @@ pub enum ParseError {
 impl ReportError for ParseError {
     fn report(&self) -> ariadne::Report<Span> {
         use ParseError::*;
-        let report = Report::build(ReportKind::Error, (), 0);
         match *self {
-            UnexpectedToken(span) => report
+            UnexpectedToken(span) => Report::build(ReportKind::Error, (), span.start)
                 .with_message("unexpected token encountered")
                 .with_label(Label::new(span).with_color(Color::Red)),
-            ExpectedIdentifier(span) => report
+            ExpectedIdentifier(span) => Report::build(ReportKind::Error, (), span.start)
                 .with_message("expected identifier")
                 .with_label(Label::new(span).with_color(Color::Red)),
-            ExpectedToken(ref kind, span) => report
+            ExpectedToken(ref kind, span) => Report::build(ReportKind::Error, (), span.start)
                 .with_message(format!("expected token {}", kind.human_name()))
                 .with_label(Label::new(span).with_color(Color::Red)),
         }

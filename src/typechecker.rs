@@ -42,26 +42,30 @@ pub enum TypeCheckError {
 impl ReportError for TypeCheckError {
     fn report(&self) -> Report<Span> {
         match *self {
-            Self::WrongNumArgs(span, actual, expected) => Report::build(ReportKind::Error, (), 0)
-                .with_message("incorrect number of arguments to function call")
-                .with_label(Label::new(span).with_color(Color::Red))
-                .with_note(format!(
-                    "function expects {} arguments but {} were provided",
-                    expected, actual
-                )),
-            Self::WrongArgType(span, actual, expected) => Report::build(ReportKind::Error, (), 0)
-                .with_message("incorrect argument type in function call")
-                .with_label(
-                    Label::new(span)
-                        .with_color(Color::Red)
-                        .with_message(format!(
-                            "argument has type {} but function expects {}",
-                            actual.to_str(),
-                            expected.to_str()
-                        )),
-                ),
+            Self::WrongNumArgs(span, actual, expected) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("incorrect number of arguments to function call")
+                    .with_label(Label::new(span).with_color(Color::Red))
+                    .with_note(format!(
+                        "function expects {} arguments but {} were provided",
+                        expected, actual
+                    ))
+            }
+            Self::WrongArgType(span, actual, expected) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("incorrect argument type in function call")
+                    .with_label(
+                        Label::new(span)
+                            .with_color(Color::Red)
+                            .with_message(format!(
+                                "argument has type {} but function expects {}",
+                                actual.to_str(),
+                                expected.to_str()
+                            )),
+                    )
+            }
             Self::UnknownFunction(ref function_name, span) => {
-                Report::build(ReportKind::Error, (), 0)
+                Report::build(ReportKind::Error, (), span.start)
                     .with_message(format!("reference to unknown function `{}`", function_name))
                     .with_label(Label::new(span).with_color(Color::Red))
             }

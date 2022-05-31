@@ -52,16 +52,17 @@ pub enum LexError {
 impl ReportError for LexError {
     fn report(&self) -> Report<Span> {
         use LexError::*;
-        let report = Report::build(ReportKind::Error, (), 0);
         match *self {
-            UnknownToken(c, span) => report
+            UnknownToken(c, span) => Report::build(ReportKind::Error, (), span.start)
                 .with_message(format!("unknown token `{}`", c))
                 .with_label(Label::new(span).with_color(Color::Red)),
-            UnterminatedString(span) => report.with_message("unterminated string").with_label(
-                Label::new(span)
-                    .with_color(Color::Red)
-                    .with_message("Each string needs to be terminated with a matching `\"`."),
-            ),
+            UnterminatedString(span) => Report::build(ReportKind::Error, (), span.start)
+                .with_message("unterminated string")
+                .with_label(
+                    Label::new(span)
+                        .with_color(Color::Red)
+                        .with_message("Each string needs to be terminated with a matching `\"`."),
+                ),
         }
         .finish()
     }
