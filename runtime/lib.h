@@ -7,7 +7,7 @@
 typedef char c_char;
 
 /**
- * Reference to a string that does not own its data.
+ * A string with associated data and length.
  */
 typedef struct
 {
