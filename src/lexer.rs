@@ -1,3 +1,10 @@
+use ariadne::{Color, Label, Report, ReportKind};
+
+use crate::{
+    error::ReportError,
+    span::{Span, Spanned},
+};
+
 #[derive(Debug)]
 pub enum TokenKind {
     StringLiteral(String),
@@ -8,25 +15,71 @@ pub enum TokenKind {
     OBrace,
     CBrace,
     SemiColon,
+    Comma,
     Unknown,
+}
+
+impl TokenKind {
+    pub fn human_name(&self) -> &'static str {
+        use TokenKind::*;
+        match *self {
+            StringLiteral(_) => "string literal",
+            Ident(_) => "identifier",
+            Fn => "`fn` keyword",
+            OParen => "`(`",
+            CParen => "`)`",
+            OBrace => "`{`",
+            CBrace => "`}`",
+            SemiColon => "`;`",
+            Comma => "`,`",
+            Unknown => "unknown token",
+        }
+    }
 }
 
 #[derive(Debug)]
 pub enum LexError {
-    UnknownToken(char, usize),
-    UnterminatedString(usize, usize),
+    UnknownToken(char, Span),
+    UnterminatedString(Span),
+}
+
+impl ReportError for LexError {
+    fn report(&self) -> Report<Span> {
+        use LexError::*;
+        let report = Report::build(ReportKind::Error, (), 0);
+        match *self {
+            UnknownToken(c, span) => report
+                .with_message(format!("unknown token `{}`", c))
+                .with_label(Label::new(span).with_color(Color::Red)),
+            UnterminatedString(span) => report.with_message("unterminated string").with_label(
+                Label::new(span)
+                    .with_color(Color::Red)
+                    .with_message("Each string needs to be terminated with a matching `\"`."),
+            ),
+        }
+        .finish()
+    }
 }
 
 #[derive(Debug)]
 pub struct Token {
-    kind: TokenKind,
-    start: usize,
-    len: usize,
+    pub kind: TokenKind,
+    pub start: usize,
+    pub len: usize,
 }
 
 impl Token {
     fn new(kind: TokenKind, start: usize, len: usize) -> Self {
         Self { kind, start, len }
+    }
+}
+
+impl Spanned for Token {
+    fn span(&self) -> Span {
+        Span {
+            start: self.start,
+            len: self.len,
+        }
     }
 }
 
@@ -79,7 +132,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             }
 
             if idx == source.len() {
-                errors.push(LexError::UnterminatedString(start, idx));
+                errors.push(LexError::UnterminatedString(Span::new(start, idx - start)));
             } else {
                 idx += 1; // Consume closing quote
             }
@@ -104,9 +157,10 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             b'{' => tokens.push(Token::new(TokenKind::OBrace, idx, 1)),
             b'}' => tokens.push(Token::new(TokenKind::CBrace, idx, 1)),
             b';' => tokens.push(Token::new(TokenKind::SemiColon, idx, 1)),
+            b',' => tokens.push(Token::new(TokenKind::Comma, idx, 1)),
             e => {
                 tokens.push(Token::new(TokenKind::Unknown, idx, 1));
-                errors.push(LexError::UnknownToken(e as char, idx));
+                errors.push(LexError::UnknownToken(e as char, Span::new(idx, 1)));
             }
         }
 
