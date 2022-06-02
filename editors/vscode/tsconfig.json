@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "alwaysStrict": true,
+    "moduleResolution": "node",
+    "removeComments": true,
+    "pretty": true,
+    "module": "CommonJS",
+    "target": "ES2020",
+    "lib": [
+      "ESNext"
+    ],
+    "sourceMap": true,
+    "incremental": true,
+    "skipLibCheck": true,
+    "noEmitHelpers": true,
+    "importHelpers": true,
+    "esModuleInterop": true,
+    "noUncheckedIndexedAccess": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "noImplicitOverride": true,
+    "importsNotUsedAsValues": "error",
+    "outDir": "./dist",
+  },
+  "references": [
+    {
+      "path": "./client/tsconfig.json"
+    },
+    {
+      "path": "./server/tsconfig.json"
+    },
+  ]
+}

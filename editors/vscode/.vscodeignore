@@ -1,1 +1,6 @@
 .gitignore
+tsconfig.json
+tsconfig.eslint.json
+.prettierrc.json
+.eslintrc.json
+/.vscode

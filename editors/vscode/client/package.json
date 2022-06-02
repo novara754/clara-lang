@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "vscode-languageclient": "^8.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.67.0"
+  }
+}
