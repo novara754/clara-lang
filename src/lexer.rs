@@ -78,6 +78,7 @@ impl TokenKind {
 pub enum LexError {
     UnknownToken(char, Span),
     UnterminatedString(Span),
+    InvalidInt(Span),
 }
 
 impl ReportError for LexError {
@@ -93,6 +94,13 @@ impl ReportError for LexError {
                     Label::new(span)
                         .with_color(Color::Red)
                         .with_message("Each string needs to be terminated with a matching `\"`."),
+                ),
+            InvalidInt(span) => Report::build(ReportKind::Error, (), span.start)
+                .with_message("invalid integer")
+                .with_label(
+                    Label::new(span)
+                        .with_message("value does not fit into signed 32-bit integer")
+                        .with_color(Color::Red),
                 ),
         }
         .finish()
@@ -182,16 +190,25 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 idx += 1; // Consume closing quote
             }
 
-            // +1 and -1 on the bounds to exclude quotation marks
-            let string = std::str::from_utf8(&source[(start + 1)..(idx - 1)])
-                .unwrap()
-                .to_owned();
+            if idx == start + 1 {
+                // The string had no content and no closing quote
+                tokens.push(Token::new(
+                    TokenKind::StringLiteral(String::new()),
+                    start,
+                    1,
+                ));
+            } else {
+                // +1 and -1 on the bounds to exclude quotation marks
+                let string = std::str::from_utf8(&source[(start + 1)..(idx - 1)])
+                    .unwrap()
+                    .to_owned();
 
-            tokens.push(Token::new(
-                TokenKind::StringLiteral(string),
-                start,
-                idx - start,
-            ));
+                tokens.push(Token::new(
+                    TokenKind::StringLiteral(string),
+                    start,
+                    idx - start,
+                ));
+            }
 
             continue;
         }
@@ -203,10 +220,16 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 idx += 1;
             }
 
-            let int_value = std::str::from_utf8(&source[start..idx])
-                .unwrap()
-                .parse()
-                .unwrap();
+            errors.push(LexError::InvalidInt(Span::new(start, idx - start)));
+
+            let int_value =
+                if let Ok(int_value) = std::str::from_utf8(&source[start..idx]).unwrap().parse() {
+                    int_value
+                } else {
+                    errors.push(LexError::InvalidInt(Span::new(start, idx - start)));
+                    0
+                };
+
             tokens.push(Token::new(
                 TokenKind::IntLiteral(int_value),
                 start,
@@ -235,7 +258,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                         idx += 1;
                         Token::new(TokenKind::EqualEqual, idx - 1, 2)
                     }
-                    _ => Token::new(TokenKind::Equal, idx - 1, 2),
+                    _ => Token::new(TokenKind::Equal, idx, 2),
                 };
                 tokens.push(token);
             }
@@ -245,7 +268,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                         idx += 1;
                         Token::new(TokenKind::LessThanEqual, idx - 1, 2)
                     }
-                    _ => Token::new(TokenKind::LessThan, idx - 1, 2),
+                    _ => Token::new(TokenKind::LessThan, idx, 2),
                 };
                 tokens.push(token);
             }
@@ -255,7 +278,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                         idx += 1;
                         Token::new(TokenKind::GreaterThanEqual, idx - 1, 2)
                     }
-                    _ => Token::new(TokenKind::GreaterThan, idx - 1, 2),
+                    _ => Token::new(TokenKind::GreaterThan, idx, 2),
                 };
                 tokens.push(token);
             }

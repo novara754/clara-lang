@@ -439,7 +439,7 @@ fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Vec<ParseError
     } = tokens.get(*idx)?
     {
         *idx += 1;
-        Type::from_str(name)
+        Type::from_string(name)
     } else {
         errors.push(ParseError::ExpectedIdentifier(tokens.get(*idx)?.span()));
         Type::Unit

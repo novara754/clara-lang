@@ -1,14 +1,7 @@
-mod codegen;
-mod error;
-mod lexer;
-mod parser;
-mod span;
-mod typechecker;
-
 use std::{io::Write, path::PathBuf, process::Command};
 
 use ariadne::Source;
-use error::ReportError;
+use clara::{codegen, error::ReportError, lexer, parser, typechecker};
 
 fn main() {
     let source_file = PathBuf::from(
