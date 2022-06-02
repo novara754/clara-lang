@@ -42,7 +42,7 @@ impl Type {
         }
     }
 
-    pub fn from_str(typename: &str) -> Self {
+    pub fn from_string(typename: &str) -> Self {
         match typename {
             "string" => Type::String,
             "int" => Type::Int,
