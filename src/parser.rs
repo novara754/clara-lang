@@ -14,6 +14,7 @@ pub enum ParseError {
     UnexpectedToken(Span),
     ExpectedIdentifier(Span),
     ExpectedToken(TokenKind, Span),
+    UnexpectedEndOfInput(Span),
 }
 
 impl ReportError for ParseError {
@@ -28,6 +29,9 @@ impl ReportError for ParseError {
                 .with_label(Label::new(span).with_color(Color::Red)),
             ExpectedToken(ref kind, span) => Report::build(ReportKind::Error, (), span.start)
                 .with_message(format!("expected token {}", kind.human_name()))
+                .with_label(Label::new(span).with_color(Color::Red)),
+            UnexpectedEndOfInput(span) => Report::build(ReportKind::Error, (), span.start)
+                .with_message("unexpected end of input")
                 .with_label(Label::new(span).with_color(Color::Red)),
         }
         .finish()
@@ -179,10 +183,10 @@ pub struct ParsedProgram {
 
 macro_rules! expect {
     ($errors:expr, $tokens:expr, $idx:expr, $($kind:tt)+) => {{
-        if matches!(&$tokens[*$idx], &Token { kind: $($kind)+, .. }) {
+        if matches!($tokens.get(*$idx)?, &Token { kind: $($kind)+, .. }) {
             *$idx += 1;
         } else {
-            $errors.push(ParseError::ExpectedToken($($kind)+, $tokens[*$idx].span()));
+            $errors.push(ParseError::ExpectedToken($($kind)+, $tokens.get(*$idx)?.span()));
         }
     }};
 }
@@ -191,7 +195,7 @@ macro_rules! recover_at_token {
     ($errors:expr, $tokens:expr, $idx:expr, $($expected_kind:tt)+) => {{
         while *$idx < $tokens.len()
             && !matches!(
-                &$tokens[*$idx],
+                $tokens.get(*$idx)?,
                 &Token {
                     kind: $($expected_kind)+,
                     ..
@@ -200,7 +204,7 @@ macro_rules! recover_at_token {
         {
             $errors.push(ParseError::ExpectedToken(
                 $($expected_kind)+,
-                $tokens[*$idx].span(),
+                $tokens.get(*$idx)?.span(),
             ));
             *$idx += 1;
         }
@@ -217,56 +221,67 @@ pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<P
     };
 
     while *idx < tokens.len() {
-        let token = &tokens[*idx];
-        match token {
-            Token {
-                kind: TokenKind::Opaque,
-                ..
-            } => {
-                let (r#struct, mut errs) = parse_opaque_struct(tokens, idx);
-                program.structs.push(r#struct);
-                errors.append(&mut errs);
+        let reached_unexpected_eoi = (|| {
+            let token = &tokens[*idx];
+            match token {
+                Token {
+                    kind: TokenKind::Opaque,
+                    ..
+                } => {
+                    let (r#struct, mut errs) = parse_opaque_struct(tokens, idx)?;
+                    program.structs.push(r#struct);
+                    errors.append(&mut errs);
+                }
+                Token {
+                    kind: TokenKind::Struct,
+                    ..
+                } => {
+                    let (r#struct, mut errs) = parse_struct(tokens, idx)?;
+                    program.structs.push(r#struct);
+                    errors.append(&mut errs);
+                }
+                Token {
+                    kind: TokenKind::Fn,
+                    ..
+                } => {
+                    let (fun, mut errs) = parse_function(tokens, idx)?;
+                    program.functions.push(fun);
+                    errors.append(&mut errs);
+                }
+                Token {
+                    kind: TokenKind::Extern,
+                    ..
+                } => {
+                    let (fun, mut errs) = parse_extern_function(tokens, idx)?;
+                    program.extern_functions.push(fun);
+                    errors.append(&mut errs);
+                }
+                _ => {
+                    errors.push(ParseError::UnexpectedToken(token.span()));
+                    *idx += 1;
+                }
             }
-            Token {
-                kind: TokenKind::Struct,
-                ..
-            } => {
-                let (r#struct, mut errs) = parse_struct(tokens, idx);
-                program.structs.push(r#struct);
-                errors.append(&mut errs);
-            }
-            Token {
-                kind: TokenKind::Fn,
-                ..
-            } => {
-                let (fun, mut errs) = parse_function(tokens, idx);
-                program.functions.push(fun);
-                errors.append(&mut errs);
-            }
-            Token {
-                kind: TokenKind::Extern,
-                ..
-            } => {
-                let (fun, mut errs) = parse_extern_function(tokens, idx);
-                program.extern_functions.push(fun);
-                errors.append(&mut errs);
-            }
-            _ => {
-                errors.push(ParseError::UnexpectedToken(token.span()));
-                *idx += 1;
-            }
-        }
+            Some(())
+        })()
+        .is_none();
+
+        if reached_unexpected_eoi {
+            let last_span = tokens.last().unwrap().span();
+            let span = Span::new(last_span.start + last_span.len - 1, 1);
+            errors.push(ParseError::UnexpectedEndOfInput(span));
+            break;
+        };
     }
 
     (program, errors)
 }
 
-fn parse_struct(tokens: &[Token], idx: &mut usize) -> (ParsedStruct, Vec<ParseError>) {
+fn parse_struct(tokens: &[Token], idx: &mut usize) -> Option<(ParsedStruct, Vec<ParseError>)> {
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::Struct);
 
-    let (name, _name_span, mut errs) = parse_name(tokens, idx);
+    let (name, _name_span, mut errs) = parse_name(tokens, idx)?;
     errors.append(&mut errs);
 
     expect!(&mut errors, tokens, idx, TokenKind::OBrace);
@@ -274,19 +289,19 @@ fn parse_struct(tokens: &[Token], idx: &mut usize) -> (ParsedStruct, Vec<ParseEr
     let mut fields = vec![];
     while *idx < tokens.len()
         && !matches!(
-            &tokens[*idx],
+            tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::CBrace,
                 ..
             }
         )
     {
-        let (field, mut errs) = parse_parameter(tokens, idx);
+        let (field, mut errs) = parse_parameter(tokens, idx)?;
         fields.push((field.name, field.ttype));
         errors.append(&mut errs);
 
         if matches!(
-            &tokens[*idx],
+            tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::Comma,
                 ..
@@ -300,30 +315,33 @@ fn parse_struct(tokens: &[Token], idx: &mut usize) -> (ParsedStruct, Vec<ParseEr
 
     recover_at_token!(&mut errors, tokens, idx, TokenKind::CBrace);
 
-    (
+    Some((
         ParsedStruct::Transparent(name, fields.into_iter().collect()),
         errors,
-    )
+    ))
 }
 
-fn parse_opaque_struct(tokens: &[Token], idx: &mut usize) -> (ParsedStruct, Vec<ParseError>) {
+fn parse_opaque_struct(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(ParsedStruct, Vec<ParseError>)> {
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::Opaque);
     expect!(&mut errors, tokens, idx, TokenKind::Struct);
 
-    let (name, _name_span, mut errs) = parse_name(tokens, idx);
+    let (name, _name_span, mut errs) = parse_name(tokens, idx)?;
     errors.append(&mut errs);
 
     expect!(&mut errors, tokens, idx, TokenKind::SemiColon);
 
-    (ParsedStruct::Opaque(name), errors)
+    Some((ParsedStruct::Opaque(name), errors))
 }
 
 fn parse_extern_function(
     tokens: &[Token],
     idx: &mut usize,
-) -> (ParsedExternFunction, Vec<ParseError>) {
+) -> Option<(ParsedExternFunction, Vec<ParseError>)> {
     let mut errors = vec![];
 
     *idx += 1; // Consume `extern` keyword
@@ -333,7 +351,7 @@ fn parse_extern_function(
     let name = if let &Token {
         kind: TokenKind::Ident(ref name),
         ..
-    } = &tokens[*idx]
+    } = tokens.get(*idx)?
     {
         *idx += 1;
         name.clone()
@@ -347,19 +365,19 @@ fn parse_extern_function(
     let mut parameters = vec![];
     while *idx < tokens.len()
         && !matches!(
-            &tokens[*idx],
+            tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::CParen,
                 ..
             }
         )
     {
-        let (param, mut errs) = parse_parameter(tokens, idx);
+        let (param, mut errs) = parse_parameter(tokens, idx)?;
         parameters.push(param);
         errors.append(&mut errs);
 
         if matches!(
-            &tokens[*idx],
+            tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::Comma,
                 ..
@@ -379,7 +397,7 @@ fn parse_extern_function(
     }) = tokens.get(*idx)
     {
         expect!(&mut errors, tokens, idx, TokenKind::Colon);
-        let (return_type, mut errs) = parse_type(tokens, idx);
+        let (return_type, mut errs) = parse_type(tokens, idx)?;
         errors.append(&mut errs);
 
         return_type
@@ -398,14 +416,14 @@ fn parse_extern_function(
         return_type,
     };
 
-    (fun, errors)
+    Some((fun, errors))
 }
 
-fn parse_type(tokens: &[Token], idx: &mut usize) -> (Type, Vec<ParseError>) {
+fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Vec<ParseError>)> {
     let mut errors = vec![];
 
     let is_pointer = matches!(
-        tokens[*idx],
+        tokens.get(*idx)?,
         Token {
             kind: TokenKind::RightArrow,
             ..
@@ -418,12 +436,12 @@ fn parse_type(tokens: &[Token], idx: &mut usize) -> (Type, Vec<ParseError>) {
     let ttype = if let &Token {
         kind: TokenKind::Ident(ref name),
         ..
-    } = &tokens[*idx]
+    } = tokens.get(*idx)?
     {
         *idx += 1;
         Type::from_str(name)
     } else {
-        errors.push(ParseError::ExpectedIdentifier(tokens[*idx].span()));
+        errors.push(ParseError::ExpectedIdentifier(tokens.get(*idx)?.span()));
         Type::Unit
     };
 
@@ -433,38 +451,41 @@ fn parse_type(tokens: &[Token], idx: &mut usize) -> (Type, Vec<ParseError>) {
         ttype
     };
 
-    (ttype, errors)
+    Some((ttype, errors))
 }
 
-fn parse_parameter(tokens: &[Token], idx: &mut usize) -> (FunctionParameter, Vec<ParseError>) {
+fn parse_parameter(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(FunctionParameter, Vec<ParseError>)> {
     let mut errors = vec![];
 
     let name = if let &Token {
         kind: TokenKind::Ident(ref name),
         ..
-    } = &tokens[*idx]
+    } = tokens.get(*idx)?
     {
         *idx += 1;
         name.clone()
     } else {
-        errors.push(ParseError::ExpectedIdentifier(tokens[*idx].span()));
+        errors.push(ParseError::ExpectedIdentifier(tokens.get(*idx)?.span()));
         String::new()
     };
 
     expect!(&mut errors, tokens, idx, TokenKind::Colon);
 
-    let (ttype, mut errs) = parse_type(tokens, idx);
+    let (ttype, mut errs) = parse_type(tokens, idx)?;
     errors.append(&mut errs);
 
-    (FunctionParameter { name, ttype }, errors)
+    Some((FunctionParameter { name, ttype }, errors))
 }
 
-fn parse_function(tokens: &[Token], idx: &mut usize) -> (ParsedFunction, Vec<ParseError>) {
+fn parse_function(tokens: &[Token], idx: &mut usize) -> Option<(ParsedFunction, Vec<ParseError>)> {
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::Fn);
 
-    let (name, _name_span, mut errs) = parse_name(tokens, idx);
+    let (name, _name_span, mut errs) = parse_name(tokens, idx)?;
     errors.append(&mut errs);
 
     expect!(&mut errors, tokens, idx, TokenKind::OParen);
@@ -472,19 +493,19 @@ fn parse_function(tokens: &[Token], idx: &mut usize) -> (ParsedFunction, Vec<Par
     let mut parameters = vec![];
     while *idx < tokens.len()
         && !matches!(
-            &tokens[*idx],
+            tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::CParen,
                 ..
             }
         )
     {
-        let (param, mut errs) = parse_parameter(tokens, idx);
+        let (param, mut errs) = parse_parameter(tokens, idx)?;
         parameters.push(param);
         errors.append(&mut errs);
 
         if matches!(
-            &tokens[*idx],
+            tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::Comma,
                 ..
@@ -498,7 +519,7 @@ fn parse_function(tokens: &[Token], idx: &mut usize) -> (ParsedFunction, Vec<Par
 
     expect!(&mut errors, tokens, idx, TokenKind::CParen);
 
-    let (body, mut errs) = parse_block(tokens, idx);
+    let (body, mut errs) = parse_block(tokens, idx)?;
     errors.append(&mut errs);
 
     let fun = ParsedFunction {
@@ -507,10 +528,10 @@ fn parse_function(tokens: &[Token], idx: &mut usize) -> (ParsedFunction, Vec<Par
         parameters,
     };
 
-    (fun, errors)
+    Some((fun, errors))
 }
 
-fn parse_block(tokens: &[Token], idx: &mut usize) -> (ParsedBlock, Vec<ParseError>) {
+fn parse_block(tokens: &[Token], idx: &mut usize) -> Option<(ParsedBlock, Vec<ParseError>)> {
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::OBrace);
@@ -518,25 +539,28 @@ fn parse_block(tokens: &[Token], idx: &mut usize) -> (ParsedBlock, Vec<ParseErro
     let mut statements = vec![];
     while *idx < tokens.len()
         && !matches!(
-            &tokens[*idx],
+            tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::CBrace,
                 ..
             }
         )
     {
-        let (stmt, mut errs) = parse_statement(tokens, idx);
+        let (stmt, mut errs) = parse_statement(tokens, idx)?;
         statements.push(stmt);
         errors.append(&mut errs);
     }
 
     expect!(&mut errors, tokens, idx, TokenKind::CBrace);
 
-    (ParsedBlock { statements }, errors)
+    Some((ParsedBlock { statements }, errors))
 }
 
-fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<ParseError>) {
-    let (statement, mut errors, needs_semi) = match &tokens[*idx] {
+fn parse_statement(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(ParsedStatement, Vec<ParseError>)> {
+    let (statement, mut errors, needs_semi) = match tokens.get(*idx)? {
         Token {
             kind: TokenKind::Let,
             ..
@@ -548,18 +572,18 @@ fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<P
             let (name, name_span) = if let tok @ &Token {
                 kind: TokenKind::Ident(ref name),
                 ..
-            } = &tokens[*idx]
+            } = &tokens.get(*idx)?
             {
                 *idx += 1;
                 (name.clone(), tok.span())
             } else {
-                errors.push(ParseError::ExpectedIdentifier(tokens[*idx].span()));
-                (String::new(), tokens[*idx].span())
+                errors.push(ParseError::ExpectedIdentifier(tokens.get(*idx)?.span()));
+                (String::new(), tokens.get(*idx)?.span())
             };
 
             expect!(&mut errors, tokens, idx, TokenKind::Equal);
 
-            let (value, mut errs) = parse_expression(tokens, idx);
+            let (value, mut errs) = parse_expression(tokens, idx)?;
             errors.append(&mut errs);
 
             let span = name_span.to(value.span());
@@ -570,18 +594,18 @@ fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<P
             kind: TokenKind::While,
             ..
         } => {
-            let (stmt, errors) = parse_while_loop(tokens, idx);
+            let (stmt, errors) = parse_while_loop(tokens, idx)?;
             (ParsedStatement::WhileLoop(stmt), errors, false)
         }
         Token {
             kind: TokenKind::If,
             ..
         } => {
-            let (if_else, errors) = parse_if_else(tokens, idx);
+            let (if_else, errors) = parse_if_else(tokens, idx)?;
             (ParsedStatement::IfElse(if_else), errors, false)
         }
         _ => {
-            let (expr, errors) = parse_expression(tokens, idx);
+            let (expr, errors) = parse_expression(tokens, idx)?;
             (ParsedStatement::Expression(expr), errors, true)
         }
     };
@@ -593,32 +617,35 @@ fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<P
         recover_at_token!(&mut errors, tokens, idx, TokenKind::SemiColon);
     }
 
-    (statement, errors)
+    Some((statement, errors))
 }
 
-fn parse_while_loop(tokens: &[Token], idx: &mut usize) -> (ParsedWhileLoop, Vec<ParseError>) {
+fn parse_while_loop(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(ParsedWhileLoop, Vec<ParseError>)> {
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::While);
 
-    let (condition, mut errs) = parse_expression(tokens, idx);
+    let (condition, mut errs) = parse_expression(tokens, idx)?;
     errors.append(&mut errs);
 
-    let (body, mut errs) = parse_block(tokens, idx);
+    let (body, mut errs) = parse_block(tokens, idx)?;
     errors.append(&mut errs);
 
-    (ParsedWhileLoop { condition, body }, errors)
+    Some((ParsedWhileLoop { condition, body }, errors))
 }
 
-fn parse_if_else(tokens: &[Token], idx: &mut usize) -> (ParsedIfElse, Vec<ParseError>) {
+fn parse_if_else(tokens: &[Token], idx: &mut usize) -> Option<(ParsedIfElse, Vec<ParseError>)> {
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::If);
 
-    let (condition, mut errs) = parse_expression(tokens, idx);
+    let (condition, mut errs) = parse_expression(tokens, idx)?;
     errors.append(&mut errs);
 
-    let (if_body, mut errs) = parse_block(tokens, idx);
+    let (if_body, mut errs) = parse_block(tokens, idx)?;
     errors.append(&mut errs);
 
     let else_body = if matches!(
@@ -630,7 +657,7 @@ fn parse_if_else(tokens: &[Token], idx: &mut usize) -> (ParsedIfElse, Vec<ParseE
     ) {
         expect!(&mut errors, tokens, idx, TokenKind::Else);
 
-        let (else_body, mut errs) = parse_block(tokens, idx);
+        let (else_body, mut errs) = parse_block(tokens, idx)?;
         errors.append(&mut errs);
 
         Some(else_body)
@@ -638,20 +665,23 @@ fn parse_if_else(tokens: &[Token], idx: &mut usize) -> (ParsedIfElse, Vec<ParseE
         None
     };
 
-    (
+    Some((
         ParsedIfElse {
             condition,
             if_body,
             else_body,
         },
         errors,
-    )
+    ))
 }
 
-fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec<ParseError>) {
+fn parse_expression(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(ParsedExpression, Vec<ParseError>)> {
     let mut errors = vec![];
     let (expr, mut errors) = loop {
-        break match &tokens[*idx] {
+        break match tokens.get(*idx)? {
             tok @ Token {
                 kind: TokenKind::Ident(name),
                 ..
@@ -660,7 +690,7 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
                     kind: TokenKind::OParen,
                     ..
                 }) => {
-                    let (func_call, mut errs) = parse_function_call(tokens, idx);
+                    let (func_call, mut errs) = parse_function_call(tokens, idx)?;
                     errors.append(&mut errs);
                     (ParsedExpression::FunctionCall(func_call), errors)
                 }
@@ -668,7 +698,7 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
                     kind: TokenKind::OBrace,
                     ..
                 }) => {
-                    let (struct_literal, mut errs) = parse_struct_literal(tokens, idx);
+                    let (struct_literal, mut errs) = parse_struct_literal(tokens, idx)?;
                     errors.append(&mut errs);
                     let span = struct_literal.span;
                     (
@@ -727,7 +757,7 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
     {
         *idx += 1; // Consume dot token.
 
-        let (field_name, field_name_span, mut errs) = parse_name(tokens, idx);
+        let (field_name, field_name_span, mut errs) = parse_name(tokens, idx)?;
         errors.append(&mut errs);
 
         let object_span = expr.span();
@@ -767,7 +797,7 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
             _ => unreachable!(),
         };
 
-        let (rhs, mut errs) = parse_expression(tokens, idx);
+        let (rhs, mut errs) = parse_expression(tokens, idx)?;
         errors.append(&mut errs);
 
         ParsedExpression::BinaryOp(Box::new(expr), Box::new(rhs), op)
@@ -775,37 +805,37 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
         expr
     };
 
-    (expr, errors)
+    Some((expr, errors))
 }
 
 fn parse_struct_literal(
     tokens: &[Token],
     idx: &mut usize,
-) -> (ParsedStructLiteral, Vec<ParseError>) {
-    let (name, name_span, mut errors) = parse_name(tokens, idx);
+) -> Option<(ParsedStructLiteral, Vec<ParseError>)> {
+    let (name, name_span, mut errors) = parse_name(tokens, idx)?;
 
     expect!(&mut errors, tokens, idx, TokenKind::OBrace);
 
     let mut fields = vec![];
     while *idx < tokens.len()
         && !matches!(
-            &tokens[*idx],
+            &tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::CBrace,
                 ..
             }
         )
     {
-        let (field_name, field_name_span, mut errs) = parse_name(tokens, idx);
+        let (field_name, field_name_span, mut errs) = parse_name(tokens, idx)?;
         errors.append(&mut errs);
 
-        let (field_value, mut errs) = parse_expression(tokens, idx);
+        let (field_value, mut errs) = parse_expression(tokens, idx)?;
         errors.append(&mut errs);
 
         fields.push((field_name, field_name_span, field_value));
 
         if matches!(
-            &tokens[*idx],
+            &tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::Comma,
                 ..
@@ -820,7 +850,7 @@ fn parse_struct_literal(
     expect!(&mut errors, tokens, idx, TokenKind::CBrace);
     let c_brace_span = tokens[*idx - 1].span();
 
-    (
+    Some((
         ParsedStructLiteral {
             name,
             name_span,
@@ -828,30 +858,33 @@ fn parse_struct_literal(
             span: name_span.to(c_brace_span),
         },
         errors,
-    )
+    ))
 }
 
-fn parse_function_call(tokens: &[Token], idx: &mut usize) -> (ParsedFunctionCall, Vec<ParseError>) {
-    let (name, name_span, mut errors) = parse_name(tokens, idx);
+fn parse_function_call(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(ParsedFunctionCall, Vec<ParseError>)> {
+    let (name, name_span, mut errors) = parse_name(tokens, idx)?;
 
     expect!(&mut errors, tokens, idx, TokenKind::OParen);
 
     let mut args = vec![];
     while *idx < tokens.len()
         && !matches!(
-            &tokens[*idx],
+            tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::CParen,
                 ..
             }
         )
     {
-        let (arg, mut errs) = parse_expression(tokens, idx);
+        let (arg, mut errs) = parse_expression(tokens, idx)?;
         args.push(arg);
         errors.append(&mut errs);
 
         if matches!(
-            &tokens[*idx],
+            &tokens.get(*idx)?,
             &Token {
                 kind: TokenKind::Comma,
                 ..
@@ -863,7 +896,7 @@ fn parse_function_call(tokens: &[Token], idx: &mut usize) -> (ParsedFunctionCall
         }
     }
 
-    let cparen_span = tokens[*idx].span();
+    let cparen_span = tokens.get(*idx)?.span();
     expect!(&mut errors, tokens, idx, TokenKind::CParen);
 
     let func_call = ParsedFunctionCall {
@@ -873,22 +906,24 @@ fn parse_function_call(tokens: &[Token], idx: &mut usize) -> (ParsedFunctionCall
         span: name_span.to(cparen_span),
     };
 
-    (func_call, errors)
+    Some((func_call, errors))
 }
 
-fn parse_name(tokens: &[Token], idx: &mut usize) -> (String, Span, Vec<ParseError>) {
-    if let tok @ &Token {
-        kind: TokenKind::Ident(ref name),
-        ..
-    } = &tokens[*idx]
-    {
-        *idx += 1;
-        (name.clone(), tok.span(), vec![])
-    } else {
-        (
-            String::new(),
-            tokens[*idx].span(),
-            vec![ParseError::ExpectedIdentifier(tokens[*idx].span())],
-        )
-    }
+fn parse_name(tokens: &[Token], idx: &mut usize) -> Option<(String, Span, Vec<ParseError>)> {
+    Some(
+        if let tok @ &Token {
+            kind: TokenKind::Ident(ref name),
+            ..
+        } = tokens.get(*idx)?
+        {
+            *idx += 1;
+            (name.clone(), tok.span(), vec![])
+        } else {
+            (
+                String::new(),
+                tokens.get(*idx)?.span(),
+                vec![ParseError::ExpectedIdentifier(tokens.get(*idx)?.span())],
+            )
+        },
+    )
 }
