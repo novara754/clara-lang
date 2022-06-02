@@ -68,6 +68,7 @@ pub enum TypeCheckError {
     WrongConditionType(Span, Type),
     UnknownFunction(String, Span),
     UnknownVariable(String, Option<String>, Span),
+    BinaryOpMismatch(Type, Type, Span, Span),
 }
 
 impl ReportError for TypeCheckError {
@@ -126,6 +127,21 @@ impl ReportError for TypeCheckError {
                         Type::Bool.to_str()
                     ))
             }
+            Self::BinaryOpMismatch(ref lhs_type, ref rhs_type, lhs_span, rhs_span) => {
+                Report::build(ReportKind::Error, (), lhs_span.start)
+                    .with_message("type mismatch in binary operator")
+                    .with_label(
+                        Label::new(lhs_span)
+                            .with_message(format!("left operand has type {}", lhs_type.to_str()))
+                            .with_color(Color::Red),
+                    )
+                    .with_label(
+                        Label::new(rhs_span)
+                            .with_message(format!("right operand has type {}", rhs_type.to_str()))
+                            .with_color(Color::Red),
+                    )
+                    .with_note("Both sides of the operator need to have the same type")
+            }
         }
         .finish()
     }
@@ -143,6 +159,12 @@ pub enum CheckedExpression {
     Literal(Literal, Type),
     FunctionCall(CheckedFunctionCall),
     Variable(String, Type),
+    BinaryOp(
+        Box<CheckedExpression>,
+        Box<CheckedExpression>,
+        BinaryOperation,
+        Type,
+    ),
 }
 
 impl CheckedExpression {
@@ -446,6 +468,34 @@ fn typecheck_expression(
                     )],
                 )
             }
+        }
+        ParsedExpression::BinaryOp(lhs, rhs, op) => {
+            let (checked_lhs, mut errors) = typecheck_expression(context, lhs);
+            let (checked_rhs, mut errs) = typecheck_expression(context, rhs);
+            errors.append(&mut errs);
+
+            if checked_lhs.ttype() != checked_rhs.ttype() {
+                errors.push(TypeCheckError::BinaryOpMismatch(
+                    checked_lhs.ttype(),
+                    checked_rhs.ttype(),
+                    lhs.span(),
+                    rhs.span(),
+                ))
+            }
+
+            let ttype = match op {
+                BinaryOperation::Equality => Type::Bool,
+            };
+
+            (
+                CheckedExpression::BinaryOp(
+                    Box::new(checked_lhs),
+                    Box::new(checked_rhs),
+                    *op,
+                    ttype,
+                ),
+                errors,
+            )
         }
     }
 }

@@ -27,6 +27,7 @@ pub enum TokenKind {
     Colon,
     RightArrow,
     Equal,
+    EqualEqual,
     Dot,
     Unknown,
 }
@@ -54,6 +55,7 @@ impl TokenKind {
             Colon => "`:`",
             RightArrow => "`->`",
             Equal => "`=`",
+            EqualEqual => "`==`",
             Dot => "`.`",
             Unknown => "unknown token",
         }
@@ -213,7 +215,16 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             b';' => tokens.push(Token::new(TokenKind::SemiColon, idx, 1)),
             b',' => tokens.push(Token::new(TokenKind::Comma, idx, 1)),
             b':' => tokens.push(Token::new(TokenKind::Colon, idx, 1)),
-            b'=' => tokens.push(Token::new(TokenKind::Equal, idx, 1)),
+            b'=' => {
+                let token = match source.get(idx + 1) {
+                    Some(b'=') => {
+                        idx += 1;
+                        Token::new(TokenKind::EqualEqual, idx - 1, 2)
+                    }
+                    _ => Token::new(TokenKind::Equal, idx - 1, 2),
+                };
+                tokens.push(token);
+            }
             b'.' => tokens.push(Token::new(TokenKind::Dot, idx, 1)),
             b'-' => match source.get(idx + 1) {
                 Some(b'>') => {

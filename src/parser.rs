@@ -47,11 +47,29 @@ pub enum Literal {
     Bool(bool, Span),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum BinaryOperation {
+    Equality,
+}
+
+impl BinaryOperation {
+    pub fn to_c(self) -> &'static str {
+        match self {
+            Self::Equality => "==",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ParsedExpression {
     Literal(Literal),
     FunctionCall(ParsedFunctionCall),
     Variable(String, Span),
+    BinaryOp(
+        Box<ParsedExpression>,
+        Box<ParsedExpression>,
+        BinaryOperation,
+    ),
 }
 
 impl Spanned for ParsedExpression {
@@ -64,6 +82,7 @@ impl Spanned for ParsedExpression {
             },
             Self::FunctionCall(f) => f.span,
             Self::Variable(_, span) => *span,
+            Self::BinaryOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
         }
     }
 }
@@ -514,7 +533,7 @@ fn parse_while_loop(tokens: &[Token], idx: &mut usize) -> (ParsedWhileLoop, Vec<
 }
 
 fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec<ParseError>) {
-    match &tokens[*idx] {
+    let (expr, mut errors) = match &tokens[*idx] {
         tok @ Token {
             kind: TokenKind::Ident(name),
             ..
@@ -563,7 +582,26 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
             )
         }
         t => panic!("unexpected token {:?}", t),
-    }
+    };
+
+    let expr = if matches!(
+        tokens.get(*idx),
+        Some(Token {
+            kind: TokenKind::EqualEqual,
+            ..
+        })
+    ) {
+        expect!(&mut errors, tokens, idx, TokenKind::EqualEqual);
+
+        let (rhs, mut errs) = parse_expression(tokens, idx);
+        errors.append(&mut errs);
+
+        ParsedExpression::BinaryOp(Box::new(expr), Box::new(rhs), BinaryOperation::Equality)
+    } else {
+        expr
+    };
+
+    (expr, errors)
 }
 
 fn parse_function_call(tokens: &[Token], idx: &mut usize) -> (ParsedFunctionCall, Vec<ParseError>) {

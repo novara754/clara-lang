@@ -94,6 +94,11 @@ fn write_expr(w: &mut impl std::io::Write, expr: &CheckedExpression) -> std::io:
             }
         },
         CheckedExpression::Variable(name, _type) => write!(w, "{}", name)?,
+        CheckedExpression::BinaryOp(lhs, rhs, op, _type) => {
+            write_expr(w, lhs)?;
+            write!(w, " {} ", op.to_c())?;
+            write_expr(w, rhs)?;
+        }
     }
     write!(w, ")")?;
     Ok(())
