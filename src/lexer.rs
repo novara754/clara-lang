@@ -18,6 +18,8 @@ pub enum TokenKind {
     Fn,
     Let,
     While,
+    If,
+    Else,
     OParen,
     CParen,
     OBrace,
@@ -28,6 +30,10 @@ pub enum TokenKind {
     RightArrow,
     Equal,
     EqualEqual,
+    GreaterThan,
+    LessThan,
+    GreaterThanEqual,
+    LessThanEqual,
     Dot,
     Unknown,
 }
@@ -46,6 +52,8 @@ impl TokenKind {
             Struct => "`struct` keyword",
             Let => "`let` keyword",
             While => "`while` keyword",
+            If => "`if` keyword",
+            Else => "`else` keyword",
             OParen => "`(`",
             CParen => "`)`",
             OBrace => "`{`",
@@ -56,6 +64,10 @@ impl TokenKind {
             RightArrow => "`->`",
             Equal => "`=`",
             EqualEqual => "`==`",
+            GreaterThan => "`>`",
+            GreaterThanEqual => "`>=`",
+            LessThan => "`<`",
+            LessThanEqual => "`<=`",
             Dot => "`.`",
             Unknown => "unknown token",
         }
@@ -144,6 +156,8 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 "struct" => TokenKind::Struct,
                 "let" => TokenKind::Let,
                 "while" => TokenKind::While,
+                "if" => TokenKind::If,
+                "else" => TokenKind::Else,
                 "true" => TokenKind::True,
                 "false" => TokenKind::False,
                 _ => TokenKind::Ident(name.to_owned()),
@@ -222,6 +236,26 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                         Token::new(TokenKind::EqualEqual, idx - 1, 2)
                     }
                     _ => Token::new(TokenKind::Equal, idx - 1, 2),
+                };
+                tokens.push(token);
+            }
+            b'<' => {
+                let token = match source.get(idx + 1) {
+                    Some(b'=') => {
+                        idx += 1;
+                        Token::new(TokenKind::LessThanEqual, idx - 1, 2)
+                    }
+                    _ => Token::new(TokenKind::LessThan, idx - 1, 2),
+                };
+                tokens.push(token);
+            }
+            b'>' => {
+                let token = match source.get(idx + 1) {
+                    Some(b'=') => {
+                        idx += 1;
+                        Token::new(TokenKind::GreaterThanEqual, idx - 1, 2)
+                    }
+                    _ => Token::new(TokenKind::GreaterThan, idx - 1, 2),
                 };
                 tokens.push(token);
             }

@@ -21,11 +21,11 @@
       "patterns": [
         {
           "name": "keyword.clara",
-          "match": "\\b(extern|fn|opaque|struct)\\b"
+          "match": "\\b(extern|fn|opaque|struct|let)\\b"
         },
         {
           "name": "keyword.control.clara",
-          "match": "\\b(while)\\b"
+          "match": "\\b(while|if|else)\\b"
         },
         {
           "name": "support.type",

@@ -1,6 +1,6 @@
 use crate::{
     parser::Literal,
-    typechecker::{CheckedExpression, CheckedProgram, CheckedStatement},
+    typechecker::{CheckedBlock, CheckedExpression, CheckedProgram, CheckedStatement},
 };
 
 macro_rules! write_indented {
@@ -22,16 +22,12 @@ pub fn generate_c(w: &mut impl std::io::Write, program: &CheckedProgram) -> std:
 
     for func in &program.functions {
         if func.name == "main" {
-            writeln!(w, "int main()\n{{")?;
+            writeln!(w, "int main()")?;
         } else {
-            writeln!(w, "void {}()\n{{", func.name)?;
+            writeln!(w, "void {}()", func.name)?;
         }
 
-        for stmt in &func.body.statements {
-            write_stmt(w, 1, stmt)?;
-        }
-
-        writeln!(w, "}}")?;
+        write_block(w, 0, &func.body)?;
     }
 
     Ok(())
@@ -55,13 +51,33 @@ fn write_stmt(
             write_indented!(w, indent, "while (")?;
             write_expr(w, &while_loop.condition)?;
             writeln!(w, ") {{")?;
-            for stmt in &while_loop.body.statements {
-                write_stmt(w, indent + 1, stmt)?;
-            }
+            write_block(w, indent, &while_loop.body)?;
             write_indented!(w, indent, "}}")?;
+        }
+        CheckedStatement::IfElse(if_else) => {
+            write_indented!(w, indent, "if (")?;
+            write_expr(w, &if_else.condition)?;
+            writeln!(w, ")")?;
+            write_block(w, indent, &if_else.if_body)?;
+            write_indented!(w, indent, "else\n")?;
+            if let Some(ref else_body) = if_else.else_body {
+                write_block(w, indent, else_body)?;
+            }
         }
     }
     writeln!(w, ";")
+}
+
+fn write_block(
+    w: &mut impl std::io::Write,
+    indent: usize,
+    block: &CheckedBlock,
+) -> std::io::Result<()> {
+    write_indented!(w, indent, "{{\n")?;
+    for stmt in &block.statements {
+        write_stmt(w, indent + 1, stmt)?;
+    }
+    write_indented!(w, indent, "}}\n")
 }
 
 fn write_expr(w: &mut impl std::io::Write, expr: &CheckedExpression) -> std::io::Result<()> {

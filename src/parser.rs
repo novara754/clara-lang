@@ -50,12 +50,20 @@ pub enum Literal {
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOperation {
     Equality,
+    GreaterThan,
+    GreaterThanEqual,
+    LessThan,
+    LessThanEqual,
 }
 
 impl BinaryOperation {
     pub fn to_c(self) -> &'static str {
         match self {
             Self::Equality => "==",
+            Self::GreaterThan => ">",
+            Self::GreaterThanEqual => ">=",
+            Self::LessThan => "<",
+            Self::LessThanEqual => "<=",
         }
     }
 }
@@ -94,10 +102,18 @@ pub struct ParsedWhileLoop {
 }
 
 #[derive(Debug)]
+pub struct ParsedIfElse {
+    pub condition: ParsedExpression,
+    pub if_body: ParsedBlock,
+    pub else_body: Option<ParsedBlock>,
+}
+
+#[derive(Debug)]
 pub enum ParsedStatement {
     Expression(ParsedExpression),
     LetAssign(String, ParsedExpression, Span),
     WhileLoop(ParsedWhileLoop),
+    IfElse(ParsedIfElse),
 }
 
 #[derive(Debug)]
@@ -501,6 +517,13 @@ fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<P
             let (stmt, errors) = parse_while_loop(tokens, idx);
             (ParsedStatement::WhileLoop(stmt), errors, false)
         }
+        Token {
+            kind: TokenKind::If,
+            ..
+        } => {
+            let (if_else, errors) = parse_if_else(tokens, idx);
+            (ParsedStatement::IfElse(if_else), errors, false)
+        }
         _ => {
             let (expr, errors) = parse_expression(tokens, idx);
             (ParsedStatement::Expression(expr), errors, true)
@@ -530,6 +553,44 @@ fn parse_while_loop(tokens: &[Token], idx: &mut usize) -> (ParsedWhileLoop, Vec<
     errors.append(&mut errs);
 
     (ParsedWhileLoop { condition, body }, errors)
+}
+
+fn parse_if_else(tokens: &[Token], idx: &mut usize) -> (ParsedIfElse, Vec<ParseError>) {
+    let mut errors = vec![];
+
+    expect!(&mut errors, tokens, idx, TokenKind::If);
+
+    let (condition, mut errs) = parse_expression(tokens, idx);
+    errors.append(&mut errs);
+
+    let (if_body, mut errs) = parse_block(tokens, idx);
+    errors.append(&mut errs);
+
+    let else_body = if matches!(
+        tokens.get(*idx),
+        Some(Token {
+            kind: TokenKind::Else,
+            ..
+        })
+    ) {
+        expect!(&mut errors, tokens, idx, TokenKind::Else);
+
+        let (else_body, mut errs) = parse_block(tokens, idx);
+        errors.append(&mut errs);
+
+        Some(else_body)
+    } else {
+        None
+    };
+
+    (
+        ParsedIfElse {
+            condition,
+            if_body,
+            else_body,
+        },
+        errors,
+    )
 }
 
 fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec<ParseError>) {
@@ -584,19 +645,33 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
         t => panic!("unexpected token {:?}", t),
     };
 
-    let expr = if matches!(
-        tokens.get(*idx),
-        Some(Token {
-            kind: TokenKind::EqualEqual,
+    let expr = if let Some(
+        tok @ Token {
+            kind:
+                TokenKind::EqualEqual
+                | TokenKind::GreaterThan
+                | TokenKind::GreaterThanEqual
+                | TokenKind::LessThan
+                | TokenKind::LessThanEqual,
             ..
-        })
-    ) {
-        expect!(&mut errors, tokens, idx, TokenKind::EqualEqual);
+        },
+    ) = tokens.get(*idx)
+    {
+        *idx += 1; // Consume oeprator token
+
+        let op = match tok.kind {
+            TokenKind::EqualEqual => BinaryOperation::Equality,
+            TokenKind::GreaterThan => BinaryOperation::GreaterThan,
+            TokenKind::GreaterThanEqual => BinaryOperation::GreaterThanEqual,
+            TokenKind::LessThan => BinaryOperation::LessThan,
+            TokenKind::LessThanEqual => BinaryOperation::LessThanEqual,
+            _ => unreachable!(),
+        };
 
         let (rhs, mut errs) = parse_expression(tokens, idx);
         errors.append(&mut errs);
 
-        ParsedExpression::BinaryOp(Box::new(expr), Box::new(rhs), BinaryOperation::Equality)
+        ParsedExpression::BinaryOp(Box::new(expr), Box::new(rhs), op)
     } else {
         expr
     };

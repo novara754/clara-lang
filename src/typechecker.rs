@@ -73,7 +73,8 @@ impl Type {
         match self {
             // TODO: Maybe handle this case better?
             Self::GenericInt => {
-                panic!("attempted to instantiate generic integer type in c codegen")
+                // panic!("attempted to instantiate generic integer type in c codegen")
+                Self::Int.to_c()
             }
             Self::Pointer(ty) => format!("{}*", ty.to_str()),
             Self::String => "string".to_string(),
@@ -211,10 +212,18 @@ pub struct CheckedWhileLoop {
 }
 
 #[derive(Debug)]
+pub struct CheckedIfElse {
+    pub condition: CheckedExpression,
+    pub if_body: CheckedBlock,
+    pub else_body: Option<CheckedBlock>,
+}
+
+#[derive(Debug)]
 pub enum CheckedStatement {
     Expression(CheckedExpression),
     LetAssign(String, CheckedExpression),
     WhileLoop(CheckedWhileLoop),
+    IfElse(CheckedIfElse),
 }
 
 #[derive(Debug)]
@@ -399,6 +408,39 @@ fn typecheck_statement(
                 errors,
             )
         }
+        ParsedStatement::IfElse(if_else) => {
+            let mut errors = vec![];
+
+            let (checked_condition, mut errs) = typecheck_expression(context, &if_else.condition);
+            errors.append(&mut errs);
+
+            if checked_condition.ttype() != Type::Bool {
+                errors.push(TypeCheckError::WrongConditionType(
+                    if_else.condition.span(),
+                    checked_condition.ttype(),
+                ));
+            }
+
+            let (checked_if_body, mut errs) = typecheck_block(context, &if_else.if_body);
+            errors.append(&mut errs);
+
+            let checked_else_body = if let Some(ref else_body) = if_else.else_body {
+                let (checked_else_body, mut errs) = typecheck_block(context, else_body);
+                errors.append(&mut errs);
+                Some(checked_else_body)
+            } else {
+                None
+            };
+
+            (
+                CheckedStatement::IfElse(CheckedIfElse {
+                    condition: checked_condition,
+                    if_body: checked_if_body,
+                    else_body: checked_else_body,
+                }),
+                errors,
+            )
+        }
     }
 }
 
@@ -512,6 +554,10 @@ fn typecheck_expression(
 
             let ttype = match op {
                 BinaryOperation::Equality => Type::Bool,
+                BinaryOperation::GreaterThan => Type::Bool,
+                BinaryOperation::GreaterThanEqual => Type::Bool,
+                BinaryOperation::LessThan => Type::Bool,
+                BinaryOperation::LessThanEqual => Type::Bool,
             };
 
             (
