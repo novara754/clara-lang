@@ -1,0 +1,55 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "clara",
+  "scopeName": "source.clara",
+  "patterns": [
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#constants"
+    }
+  ],
+  "repository": {
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.clara",
+          "match": "\\b(extern|fn|opaque|struct)\\b"
+        },
+        {
+          "name": "keyword.control.clara",
+          "match": "\\b(while)\\b"
+        },
+        {
+          "name": "support.type",
+          "match": "\\b(string|int|bool|c_char|c_int)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "name": "constant.numeric.clara",
+      "patterns": [
+        {
+          "name": "constant.numeric.clara",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "constants": {
+      "name": "constant.language.clara",
+      "match": "\\b(true|false)\\b"
+    },
+    "strings": {
+      "name": "string.quoted.double.clara",
+      "begin": "\"",
+      "end": "\""
+    }
+  }
+}
