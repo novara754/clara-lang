@@ -119,6 +119,29 @@ macro_rules! expect {
     }};
 }
 
+macro_rules! recover_at_token {
+    ($tokens:expr, $idx:expr, $($expected_kind:tt)+) => {{
+        let mut errors = vec![];
+        while *$idx < $tokens.len()
+            && !matches!(
+                &$tokens[*$idx],
+                &Token {
+                    kind: $($expected_kind)+,
+                    ..
+                }
+            )
+        {
+            errors.push(ParseError::ExpectedToken(
+                $($expected_kind)+,
+                $tokens[*$idx].span(),
+            ));
+            *$idx += 1;
+        }
+        expect!(&mut errors, $tokens, $idx, $($expected_kind)+);
+        errors
+    }};
+}
+
 pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<ParseError>) {
     let mut errors = vec![];
     let mut program = ParsedProgram {
@@ -257,18 +280,8 @@ fn parse_extern_function(
     // Semicolon should be the very next token, but if there was a parse error before
     // that might not be the case.
     // Looking for the next semicolon allows for recovery from an invalid state
-    while *idx < tokens.len()
-        && !matches!(
-            &tokens[*idx],
-            &Token {
-                kind: TokenKind::SemiColon,
-                ..
-            }
-        )
-    {
-        *idx += 1;
-    }
-    expect!(&mut errors, tokens, idx, TokenKind::SemiColon);
+    let mut errs = recover_at_token!(tokens, idx, TokenKind::SemiColon);
+    errors.append(&mut errs);
 
     let fun = ParsedExternFunction {
         name,
@@ -462,18 +475,8 @@ fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<P
     // Semicolon should be the very next token, but if there was a parse error before
     // that might not be the case.
     // Looking for the next semicolon allows for recovery from an invalid state
-    while *idx < tokens.len()
-        && !matches!(
-            &tokens[*idx],
-            &Token {
-                kind: TokenKind::SemiColon,
-                ..
-            }
-        )
-    {
-        *idx += 1;
-    }
-    expect!(&mut errors, tokens, idx, TokenKind::SemiColon);
+    let mut errs = recover_at_token!(tokens, idx, TokenKind::SemiColon);
+    errors.append(&mut errs);
 
     (statement, errors)
 }
