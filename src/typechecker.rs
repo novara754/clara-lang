@@ -17,6 +17,7 @@ pub enum Type {
     Pointer(Box<Type>),
     String,
     Int,
+    Bool,
     Unit,
     CChar,
     Incomplete,
@@ -27,6 +28,7 @@ impl Type {
         match typename {
             "string" => Type::String,
             "int" => Type::Int,
+            "bool" => Type::Bool,
             "c_char" => Type::CChar,
             "()" => Type::Unit,
             _ => Type::UserDefined(typename.to_string()),
@@ -38,6 +40,7 @@ impl Type {
             Self::Pointer(ty) => format!("->{}", ty.to_str()),
             Self::String => "string".to_string(),
             Self::Int => "int".to_string(),
+            Self::Bool => "bool".to_string(),
             Self::Unit => "unit".to_string(),
             Self::CChar => "c_char".to_string(),
             Self::Incomplete => "incomplete type".to_string(),
@@ -50,6 +53,7 @@ impl Type {
             Self::Pointer(ty) => format!("{}*", ty.to_str()),
             Self::String => "string".to_string(),
             Self::Int => "int".to_string(),
+            Self::Bool => "bool".to_string(),
             Self::Unit => "unit".to_string(),
             Self::CChar => "c_char".to_string(),
             Self::Incomplete => "incomplete type".to_string(),
@@ -61,6 +65,7 @@ impl Type {
 pub enum TypeCheckError {
     WrongNumArgs(Span, usize, usize),
     WrongArgType(Span, Type, Type),
+    WrongConditionType(Span, Type),
     UnknownFunction(String, Span),
     UnknownVariable(String, Option<String>, Span),
 }
@@ -108,6 +113,19 @@ impl ReportError for TypeCheckError {
                 }
                 .with_label(Label::new(span).with_color(Color::Red))
             }
+            Self::WrongConditionType(span, ref actual) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("incorrect type in condition")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!("expression has type {}", actual.to_str()))
+                            .with_color(Color::Red),
+                    )
+                    .with_note(format!(
+                        "expression in condition has to be of type {}",
+                        Type::Bool.to_str()
+                    ))
+            }
         }
         .finish()
     }
@@ -138,9 +156,16 @@ impl CheckedExpression {
 }
 
 #[derive(Debug)]
+pub struct CheckedWhileLoop {
+    pub condition: CheckedExpression,
+    pub body: CheckedBlock,
+}
+
+#[derive(Debug)]
 pub enum CheckedStatement {
     Expression(CheckedExpression),
     LetAssign(String, CheckedExpression),
+    WhileLoop(CheckedWhileLoop),
 }
 
 #[derive(Debug)]
@@ -300,6 +325,31 @@ fn typecheck_statement(
                 errors,
             )
         }
+        ParsedStatement::WhileLoop(while_loop) => {
+            let mut errors = vec![];
+
+            let (checked_condition, mut errs) =
+                typecheck_expression(context, &while_loop.condition);
+            errors.append(&mut errs);
+
+            if checked_condition.ttype() != Type::Bool {
+                errors.push(TypeCheckError::WrongConditionType(
+                    while_loop.condition.span(),
+                    checked_condition.ttype(),
+                ));
+            }
+
+            let (checked_body, mut errs) = typecheck_block(context, &while_loop.body);
+            errors.append(&mut errs);
+
+            (
+                CheckedStatement::WhileLoop(CheckedWhileLoop {
+                    condition: checked_condition,
+                    body: checked_body,
+                }),
+                errors,
+            )
+        }
     }
 }
 
@@ -316,6 +366,10 @@ fn typecheck_expression(
             ),
             Literal::Int(_, _) => (
                 CheckedExpression::Literal(literal.clone(), Type::Int),
+                vec![],
+            ),
+            Literal::Bool(_, _) => (
+                CheckedExpression::Literal(literal.clone(), Type::Bool),
                 vec![],
             ),
         },

@@ -44,6 +44,7 @@ pub struct ParsedFunctionCall {
 pub enum Literal {
     String(String, Span),
     Int(i32, Span),
+    Bool(bool, Span),
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,7 @@ impl Spanned for ParsedExpression {
             Self::Literal(l) => match l {
                 Literal::String(_, span) => *span,
                 Literal::Int(_, span) => *span,
+                Literal::Bool(_, span) => *span,
             },
             Self::FunctionCall(f) => f.span,
             Self::Variable(_, span) => *span,
@@ -67,9 +69,16 @@ impl Spanned for ParsedExpression {
 }
 
 #[derive(Debug)]
+pub struct ParsedWhileLoop {
+    pub condition: ParsedExpression,
+    pub body: ParsedBlock,
+}
+
+#[derive(Debug)]
 pub enum ParsedStatement {
     Expression(ParsedExpression),
     LetAssign(String, ParsedExpression, Span),
+    WhileLoop(ParsedWhileLoop),
 }
 
 #[derive(Debug)]
@@ -436,7 +445,7 @@ fn parse_block(tokens: &[Token], idx: &mut usize) -> (ParsedBlock, Vec<ParseErro
 }
 
 fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<ParseError>) {
-    let (statement, mut errors) = match &tokens[*idx] {
+    let (statement, mut errors, needs_semi) = match &tokens[*idx] {
         Token {
             kind: TokenKind::Let,
             ..
@@ -464,21 +473,44 @@ fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<P
 
             let span = name_span.to(value.span());
 
-            (ParsedStatement::LetAssign(name, value, span), errors)
+            (ParsedStatement::LetAssign(name, value, span), errors, true)
+        }
+        Token {
+            kind: TokenKind::While,
+            ..
+        } => {
+            let (stmt, errors) = parse_while_loop(tokens, idx);
+            (ParsedStatement::WhileLoop(stmt), errors, false)
         }
         _ => {
             let (expr, errors) = parse_expression(tokens, idx);
-            (ParsedStatement::Expression(expr), errors)
+            (ParsedStatement::Expression(expr), errors, true)
         }
     };
 
-    // Semicolon should be the very next token, but if there was a parse error before
-    // that might not be the case.
-    // Looking for the next semicolon allows for recovery from an invalid state
-    let mut errs = recover_at_token!(tokens, idx, TokenKind::SemiColon);
-    errors.append(&mut errs);
+    if needs_semi {
+        // Semicolon should be the very next token, but if there was a parse error before
+        // that might not be the case.
+        // Looking for the next semicolon allows for recovery from an invalid state
+        let mut errs = recover_at_token!(tokens, idx, TokenKind::SemiColon);
+        errors.append(&mut errs);
+    }
 
     (statement, errors)
+}
+
+fn parse_while_loop(tokens: &[Token], idx: &mut usize) -> (ParsedWhileLoop, Vec<ParseError>) {
+    let mut errors = vec![];
+
+    expect!(&mut errors, tokens, idx, TokenKind::While);
+
+    let (condition, mut errs) = parse_expression(tokens, idx);
+    errors.append(&mut errs);
+
+    let (body, mut errs) = parse_block(tokens, idx);
+    errors.append(&mut errs);
+
+    (ParsedWhileLoop { condition, body }, errors)
 }
 
 fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec<ParseError>) {
@@ -516,6 +548,17 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
             *idx += 1;
             (
                 ParsedExpression::Literal(Literal::Int(*int, tok.span())),
+                vec![],
+            )
+        }
+        tok @ Token {
+            kind: TokenKind::True | TokenKind::False,
+            ..
+        } => {
+            *idx += 1;
+            let bool_value = matches!(tok.kind, TokenKind::True);
+            (
+                ParsedExpression::Literal(Literal::Bool(bool_value, tok.span())),
                 vec![],
             )
         }

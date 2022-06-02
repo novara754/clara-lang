@@ -10,11 +10,14 @@ pub enum TokenKind {
     StringLiteral(String),
     IntLiteral(i32),
     Ident(String),
+    True,
+    False,
     Opaque,
     Struct,
     Extern,
     Fn,
     Let,
+    While,
     OParen,
     CParen,
     OBrace,
@@ -34,12 +37,14 @@ impl TokenKind {
         match *self {
             StringLiteral(_) => "string literal",
             IntLiteral(_) => "integer literal",
+            True | False => "boolean literal",
             Ident(_) => "identifier",
             Fn => "`fn` keyword",
             Extern => "`extern` keyword",
             Opaque => "`opaque` keyword",
             Struct => "`struct` keyword",
             Let => "`let` keyword",
+            While => "`while` keyword",
             OParen => "`(`",
             CParen => "`)`",
             OBrace => "`{`",
@@ -130,19 +135,18 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             let name = std::str::from_utf8(&source[start..idx]).unwrap();
 
             let len = idx - start;
-            let token = match name {
-                "fn" => Token::new(TokenKind::Fn, start, len),
-                "extern" => Token::new(TokenKind::Extern, start, len),
-                "opaque" => Token::new(TokenKind::Opaque, start, len),
-                "struct" => Token::new(TokenKind::Struct, start, len),
-                "let" => Token::new(TokenKind::Let, start, len),
-                _ => {
-                    let name = name.to_owned();
-                    Token::new(TokenKind::Ident(name), start, len)
-                }
+            let kind = match name {
+                "fn" => TokenKind::Fn,
+                "extern" => TokenKind::Extern,
+                "opaque" => TokenKind::Opaque,
+                "struct" => TokenKind::Struct,
+                "let" => TokenKind::Let,
+                "while" => TokenKind::While,
+                "true" => TokenKind::True,
+                "false" => TokenKind::False,
+                _ => TokenKind::Ident(name.to_owned()),
             };
-
-            tokens.push(token);
+            tokens.push(Token::new(kind, start, len));
 
             continue;
         }
