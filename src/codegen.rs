@@ -1,6 +1,5 @@
-use crate::{
-    parser::Literal,
-    typechecker::{CheckedBlock, CheckedExpression, CheckedProgram, CheckedStatement},
+use crate::typechecker::{
+    CheckedBlock, CheckedExpression, CheckedLiteral, CheckedProgram, CheckedStatement,
 };
 
 macro_rules! write_indented {
@@ -19,6 +18,18 @@ macro_rules! write_indented {
 
 pub fn generate_c(w: &mut impl std::io::Write, program: &CheckedProgram) -> std::io::Result<()> {
     writeln!(w, "#include <lib.h>")?;
+
+    for r#struct in &program.structs {
+        write!(w, "typedef struct {}", r#struct.name)?;
+        if !r#struct.is_opaque {
+            writeln!(w, "{{")?;
+            for (field_name, field_type) in &r#struct.fields {
+                writeln!(w, "\t{} {};", field_type.to_c(), field_name)?;
+            }
+            write!(w, "}} {}", r#struct.name)?;
+        }
+        writeln!(w, ";\n")?;
+    }
 
     for func in &program.functions {
         if func.name == "main" {
@@ -93,8 +104,8 @@ fn write_expr(w: &mut impl std::io::Write, expr: &CheckedExpression) -> std::io:
             }
             write!(w, ")")?;
         }
-        CheckedExpression::Literal(literal, _type) => match literal {
-            Literal::String(string, _) => {
+        CheckedExpression::Literal(literal) => match literal {
+            CheckedLiteral::String(string, _) => {
                 write!(
                     w,
                     "(string){{ .data = \"{}\", .length = {} }}",
@@ -102,11 +113,20 @@ fn write_expr(w: &mut impl std::io::Write, expr: &CheckedExpression) -> std::io:
                     string.len()
                 )?;
             }
-            Literal::Int(int, _) => {
+            CheckedLiteral::Int(int, _) => {
                 write!(w, "{}", int)?;
             }
-            Literal::Bool(bool_value, _) => {
+            CheckedLiteral::Bool(bool_value, _) => {
                 write!(w, "{}", bool_value)?;
+            }
+            CheckedLiteral::Struct(struct_literal, _) => {
+                write!(w, "({}){{", struct_literal.name)?;
+                for (field_name, field_value) in &struct_literal.fields {
+                    write!(w, ".{} = ", field_name)?;
+                    write_expr(w, field_value)?;
+                    write!(w, ", ")?;
+                }
+                write!(w, "}}")?;
             }
         },
         CheckedExpression::Variable(name, _type) => write!(w, "{}", name)?,
@@ -114,6 +134,10 @@ fn write_expr(w: &mut impl std::io::Write, expr: &CheckedExpression) -> std::io:
             write_expr(w, lhs)?;
             write!(w, " {} ", op.to_c())?;
             write_expr(w, rhs)?;
+        }
+        CheckedExpression::FieldAccess(field_access, _type) => {
+            write_expr(w, &field_access.object)?;
+            write!(w, ".{}", field_access.field_name)?;
         }
     }
     write!(w, ")")?;

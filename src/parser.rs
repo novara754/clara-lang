@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ariadne::{Color, Label, Report, ReportKind};
 
 use crate::{
@@ -41,10 +43,19 @@ pub struct ParsedFunctionCall {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedStructLiteral {
+    pub name: String,
+    pub name_span: Span,
+    pub fields: Vec<(String, Span, ParsedExpression)>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum Literal {
     String(String, Span),
     Int(i32, Span),
     Bool(bool, Span),
+    Struct(ParsedStructLiteral, Span),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +80,15 @@ impl BinaryOperation {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedFieldAccess {
+    pub object: Box<ParsedExpression>,
+    pub object_span: Span,
+    pub field_name: String,
+    pub field_name_span: Span,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedExpression {
     Literal(Literal),
     FunctionCall(ParsedFunctionCall),
@@ -78,6 +98,7 @@ pub enum ParsedExpression {
         Box<ParsedExpression>,
         BinaryOperation,
     ),
+    FieldAccess(ParsedFieldAccess),
 }
 
 impl Spanned for ParsedExpression {
@@ -87,10 +108,12 @@ impl Spanned for ParsedExpression {
                 Literal::String(_, span) => *span,
                 Literal::Int(_, span) => *span,
                 Literal::Bool(_, span) => *span,
+                Literal::Struct(_, span) => *span,
             },
             Self::FunctionCall(f) => f.span,
             Self::Variable(_, span) => *span,
             Self::BinaryOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
+            ParsedExpression::FieldAccess(field_access) => field_access.span,
         }
     }
 }
@@ -144,6 +167,7 @@ pub struct ParsedExternFunction {
 #[derive(Debug)]
 pub enum ParsedStruct {
     Opaque(String),
+    Transparent(String, HashMap<String, Type>),
 }
 
 #[derive(Debug)]
@@ -164,8 +188,7 @@ macro_rules! expect {
 }
 
 macro_rules! recover_at_token {
-    ($tokens:expr, $idx:expr, $($expected_kind:tt)+) => {{
-        let mut errors = vec![];
+    ($errors:expr, $tokens:expr, $idx:expr, $($expected_kind:tt)+) => {{
         while *$idx < $tokens.len()
             && !matches!(
                 &$tokens[*$idx],
@@ -175,14 +198,13 @@ macro_rules! recover_at_token {
                 }
             )
         {
-            errors.push(ParseError::ExpectedToken(
+            $errors.push(ParseError::ExpectedToken(
                 $($expected_kind)+,
                 $tokens[*$idx].span(),
             ));
             *$idx += 1;
         }
-        expect!(&mut errors, $tokens, $idx, $($expected_kind)+);
-        errors
+        expect!($errors, $tokens, $idx, $($expected_kind)+);
     }};
 }
 
@@ -202,6 +224,14 @@ pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<P
                 ..
             } => {
                 let (r#struct, mut errs) = parse_opaque_struct(tokens, idx);
+                program.structs.push(r#struct);
+                errors.append(&mut errs);
+            }
+            Token {
+                kind: TokenKind::Struct,
+                ..
+            } => {
+                let (r#struct, mut errs) = parse_struct(tokens, idx);
                 program.structs.push(r#struct);
                 errors.append(&mut errs);
             }
@@ -231,23 +261,59 @@ pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<P
     (program, errors)
 }
 
+fn parse_struct(tokens: &[Token], idx: &mut usize) -> (ParsedStruct, Vec<ParseError>) {
+    let mut errors = vec![];
+
+    expect!(&mut errors, tokens, idx, TokenKind::Struct);
+
+    let (name, _name_span, mut errs) = parse_name(tokens, idx);
+    errors.append(&mut errs);
+
+    expect!(&mut errors, tokens, idx, TokenKind::OBrace);
+
+    let mut fields = vec![];
+    while *idx < tokens.len()
+        && !matches!(
+            &tokens[*idx],
+            &Token {
+                kind: TokenKind::CBrace,
+                ..
+            }
+        )
+    {
+        let (field, mut errs) = parse_parameter(tokens, idx);
+        fields.push((field.name, field.ttype));
+        errors.append(&mut errs);
+
+        if matches!(
+            &tokens[*idx],
+            &Token {
+                kind: TokenKind::Comma,
+                ..
+            }
+        ) {
+            *idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    recover_at_token!(&mut errors, tokens, idx, TokenKind::CBrace);
+
+    (
+        ParsedStruct::Transparent(name, fields.into_iter().collect()),
+        errors,
+    )
+}
+
 fn parse_opaque_struct(tokens: &[Token], idx: &mut usize) -> (ParsedStruct, Vec<ParseError>) {
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::Opaque);
     expect!(&mut errors, tokens, idx, TokenKind::Struct);
 
-    let name = if let &Token {
-        kind: TokenKind::Ident(ref name),
-        ..
-    } = &tokens[*idx]
-    {
-        *idx += 1;
-        name.clone()
-    } else {
-        errors.push(ParseError::ExpectedIdentifier(tokens[*idx].span()));
-        String::new()
-    };
+    let (name, _name_span, mut errs) = parse_name(tokens, idx);
+    errors.append(&mut errs);
 
     expect!(&mut errors, tokens, idx, TokenKind::SemiColon);
 
@@ -324,8 +390,7 @@ fn parse_extern_function(
     // Semicolon should be the very next token, but if there was a parse error before
     // that might not be the case.
     // Looking for the next semicolon allows for recovery from an invalid state
-    let mut errs = recover_at_token!(tokens, idx, TokenKind::SemiColon);
-    errors.append(&mut errs);
+    recover_at_token!(&mut errors, tokens, idx, TokenKind::SemiColon);
 
     let fun = ParsedExternFunction {
         name,
@@ -397,19 +462,10 @@ fn parse_parameter(tokens: &[Token], idx: &mut usize) -> (FunctionParameter, Vec
 fn parse_function(tokens: &[Token], idx: &mut usize) -> (ParsedFunction, Vec<ParseError>) {
     let mut errors = vec![];
 
-    *idx += 1; // Consume `fn` keyword
+    expect!(&mut errors, tokens, idx, TokenKind::Fn);
 
-    let name = if let &Token {
-        kind: TokenKind::Ident(ref name),
-        ..
-    } = &tokens[*idx]
-    {
-        *idx += 1;
-        name.clone()
-    } else {
-        errors.push(ParseError::ExpectedIdentifier(tokens[*idx].span()));
-        String::new()
-    };
+    let (name, _name_span, mut errs) = parse_name(tokens, idx);
+    errors.append(&mut errs);
 
     expect!(&mut errors, tokens, idx, TokenKind::OParen);
 
@@ -534,8 +590,7 @@ fn parse_statement(tokens: &[Token], idx: &mut usize) -> (ParsedStatement, Vec<P
         // Semicolon should be the very next token, but if there was a parse error before
         // that might not be the case.
         // Looking for the next semicolon allows for recovery from an invalid state
-        let mut errs = recover_at_token!(tokens, idx, TokenKind::SemiColon);
-        errors.append(&mut errs);
+        recover_at_token!(&mut errors, tokens, idx, TokenKind::SemiColon);
     }
 
     (statement, errors)
@@ -599,14 +654,29 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
         break match &tokens[*idx] {
             tok @ Token {
                 kind: TokenKind::Ident(name),
-        } => {
-            if let Some(Token {
-                kind: TokenKind::OParen,
                 ..
-            }) = tokens.get(*idx + 1)
-            {
-                let (func_call, errors) = parse_function_call(tokens, idx);
-                (ParsedExpression::FunctionCall(func_call), errors)
+            } => match tokens.get(*idx + 1) {
+                Some(Token {
+                    kind: TokenKind::OParen,
+                    ..
+                }) => {
+                    let (func_call, mut errs) = parse_function_call(tokens, idx);
+                    errors.append(&mut errs);
+                    (ParsedExpression::FunctionCall(func_call), errors)
+                }
+                Some(Token {
+                    kind: TokenKind::OBrace,
+                    ..
+                }) => {
+                    let (struct_literal, mut errs) = parse_struct_literal(tokens, idx);
+                    errors.append(&mut errs);
+                    let span = struct_literal.span;
+                    (
+                        ParsedExpression::Literal(Literal::Struct(struct_literal, span)),
+                        errors,
+                    )
+                }
+                _ => {
                     *idx += 1;
                     (ParsedExpression::Variable(name.clone(), tok.span()), errors)
                 }
@@ -650,6 +720,30 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
         };
     };
 
+    let expr = if let Some(Token {
+        kind: TokenKind::Dot,
+        ..
+    }) = tokens.get(*idx)
+    {
+        *idx += 1; // Consume dot token.
+
+        let (field_name, field_name_span, mut errs) = parse_name(tokens, idx);
+        errors.append(&mut errs);
+
+        let object_span = expr.span();
+        let span = object_span.to(field_name_span);
+
+        ParsedExpression::FieldAccess(ParsedFieldAccess {
+            object: Box::new(expr),
+            object_span,
+            field_name,
+            field_name_span,
+            span,
+        })
+    } else {
+        expr
+    };
+
     let expr = if let Some(
         tok @ Token {
             kind:
@@ -684,20 +778,61 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
     (expr, errors)
 }
 
-fn parse_function_call(tokens: &[Token], idx: &mut usize) -> (ParsedFunctionCall, Vec<ParseError>) {
-    let mut errors = vec![];
+fn parse_struct_literal(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> (ParsedStructLiteral, Vec<ParseError>) {
+    let (name, name_span, mut errors) = parse_name(tokens, idx);
 
-    let (name, name_span) = if let tok @ &Token {
-        kind: TokenKind::Ident(ref name),
-        ..
-    } = &tokens[*idx]
+    expect!(&mut errors, tokens, idx, TokenKind::OBrace);
+
+    let mut fields = vec![];
+    while *idx < tokens.len()
+        && !matches!(
+            &tokens[*idx],
+            &Token {
+                kind: TokenKind::CBrace,
+                ..
+            }
+        )
     {
-        *idx += 1;
-        (name.clone(), tok.span())
-    } else {
-        errors.push(ParseError::ExpectedIdentifier(tokens[*idx].span()));
-        (String::new(), tokens[*idx].span())
-    };
+        let (field_name, field_name_span, mut errs) = parse_name(tokens, idx);
+        errors.append(&mut errs);
+
+        let (field_value, mut errs) = parse_expression(tokens, idx);
+        errors.append(&mut errs);
+
+        fields.push((field_name, field_name_span, field_value));
+
+        if matches!(
+            &tokens[*idx],
+            &Token {
+                kind: TokenKind::Comma,
+                ..
+            }
+        ) {
+            *idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    expect!(&mut errors, tokens, idx, TokenKind::CBrace);
+    let c_brace_span = tokens[*idx - 1].span();
+
+    (
+        ParsedStructLiteral {
+            name,
+            name_span,
+            fields,
+            span: name_span.to(c_brace_span),
+        },
+        errors,
+    )
+}
+
+fn parse_function_call(tokens: &[Token], idx: &mut usize) -> (ParsedFunctionCall, Vec<ParseError>) {
+    let (name, name_span, mut errors) = parse_name(tokens, idx);
 
     expect!(&mut errors, tokens, idx, TokenKind::OParen);
 
@@ -739,4 +874,21 @@ fn parse_function_call(tokens: &[Token], idx: &mut usize) -> (ParsedFunctionCall
     };
 
     (func_call, errors)
+}
+
+fn parse_name(tokens: &[Token], idx: &mut usize) -> (String, Span, Vec<ParseError>) {
+    if let tok @ &Token {
+        kind: TokenKind::Ident(ref name),
+        ..
+    } = &tokens[*idx]
+    {
+        *idx += 1;
+        (name.clone(), tok.span(), vec![])
+    } else {
+        (
+            String::new(),
+            tokens[*idx].span(),
+            vec![ParseError::ExpectedIdentifier(tokens[*idx].span())],
+        )
+    }
 }

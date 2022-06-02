@@ -96,6 +96,13 @@ pub enum TypeCheckError {
     UnknownFunction(String, Span),
     UnknownVariable(String, Option<String>, Span),
     BinaryOpMismatch(Type, Type, Span, Span),
+    UnknownType(String, Span),
+    OpaqueStructFieldAccess(Type, Span),
+    FieldAccessInvalidField(Type, String, Span),
+    ObjectIsNotAStruct(Type, Span),
+    StructFieldWrongType(String, String, Type, Type, Span),
+    StructMissingField(String, String, Span),
+    StructSuperfluousField(String, String, Span),
 }
 
 impl ReportError for TypeCheckError {
@@ -169,6 +176,99 @@ impl ReportError for TypeCheckError {
                     )
                     .with_note("Both sides of the operator need to have the same type")
             }
+            Self::UnknownType(ref type_name, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message(format!("reference to unknown type `{}`", type_name))
+                    .with_label(
+                        Label::new(span)
+                            .with_message("type is referenced here")
+                            .with_color(Color::Red),
+                    )
+            }
+            Self::OpaqueStructFieldAccess(ref object_type, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("field access on opaque struct")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "cannot access fields of opaque struct type {}",
+                                object_type.to_str()
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
+            Self::FieldAccessInvalidField(ref object_type, ref field_name, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("invalid struct field")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "struct type {} has no field by the name of `{}`",
+                                object_type.to_str(),
+                                field_name
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
+            Self::ObjectIsNotAStruct(ref object_type, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("object is not a struct")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "trying to access field on non-struct type {}",
+                                object_type.to_str()
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
+            Self::StructMissingField(ref struct_name, ref missing_field_name, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("missing field in struct literal")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "missing field `{}` in literal for struct `{}`",
+                                missing_field_name, struct_name
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
+            Self::StructFieldWrongType(
+                ref struct_name,
+                ref field_name,
+                ref actual,
+                ref expected,
+                span,
+            ) => Report::build(ReportKind::Error, (), span.start)
+                .with_message("wrong type for field in struct literal")
+                .with_label(
+                    Label::new(span)
+                        .with_message(format!(
+                            "expression has type {} but struct expects type {}",
+                            actual.to_str(),
+                            expected.to_str()
+                        ))
+                        .with_color(Color::Red),
+                )
+                .with_note(format!(
+                    "Field `{}` on struct `{}` has type `{}`",
+                    field_name,
+                    struct_name,
+                    expected.to_str()
+                )),
+            Self::StructSuperfluousField(ref struct_name, ref field_name, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("incorrect field in struct literal")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "no field `{}` on struct `{}`",
+                                field_name, struct_name
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
         }
         .finish()
     }
@@ -182,8 +282,28 @@ pub struct CheckedFunctionCall {
 }
 
 #[derive(Debug)]
+pub struct CheckedStructLiteral {
+    pub name: String,
+    pub fields: Vec<(String, CheckedExpression)>,
+}
+
+#[derive(Debug)]
+pub enum CheckedLiteral {
+    String(String, Type),
+    Int(i32, Type),
+    Bool(bool, Type),
+    Struct(CheckedStructLiteral, Type),
+}
+
+#[derive(Debug)]
+pub struct CheckedFieldAccess {
+    pub object: Box<CheckedExpression>,
+    pub field_name: String,
+}
+
+#[derive(Debug)]
 pub enum CheckedExpression {
-    Literal(Literal, Type),
+    Literal(CheckedLiteral),
     FunctionCall(CheckedFunctionCall),
     Variable(String, Type),
     BinaryOp(
@@ -192,15 +312,23 @@ pub enum CheckedExpression {
         BinaryOperation,
         Type,
     ),
+    FieldAccess(CheckedFieldAccess, Type),
 }
 
 impl CheckedExpression {
     pub fn ttype(&self) -> Type {
         match self {
-            Self::Literal(_literal, ttype) => ttype.clone(),
+            Self::Literal(literal) => match literal {
+                CheckedLiteral::String(_, ttype) => ttype,
+                CheckedLiteral::Int(_, ttype) => ttype,
+                CheckedLiteral::Bool(_, ttype) => ttype,
+                CheckedLiteral::Struct(_, ttype) => ttype,
+            }
+            .clone(),
             Self::FunctionCall(func_call) => func_call.ttype.clone(),
             Self::Variable(_name, ttype) => ttype.clone(),
             Self::BinaryOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
+            Self::FieldAccess(_field_access, ttype) => ttype.clone(),
         }
     }
 }
@@ -238,8 +366,16 @@ pub struct CheckedFunction {
 }
 
 #[derive(Debug)]
+pub struct Struct {
+    pub name: String,
+    pub fields: HashMap<String, Type>,
+    pub is_opaque: bool,
+}
+
+#[derive(Debug)]
 pub struct CheckedProgram {
     pub functions: Vec<CheckedFunction>,
+    pub structs: Vec<Struct>,
 }
 
 #[derive(Debug)]
@@ -286,7 +422,7 @@ impl ScopeStack {
 
 #[derive(Debug)]
 struct Context {
-    known_structs: HashMap<String, ()>,
+    known_structs: HashMap<String, Struct>,
     known_functions: HashMap<String, Function>,
     scope_stack: ScopeStack,
 }
@@ -322,7 +458,22 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
     }
     for r#struct in &program.structs {
         match r#struct {
-            ParsedStruct::Opaque(name) => context.known_structs.insert(name.clone(), ()),
+            ParsedStruct::Opaque(name) => context.known_structs.insert(
+                name.clone(),
+                Struct {
+                    name: name.clone(),
+                    fields: HashMap::new(),
+                    is_opaque: true,
+                },
+            ),
+            ParsedStruct::Transparent(name, fields) => context.known_structs.insert(
+                name.clone(),
+                Struct {
+                    name: name.clone(),
+                    fields: fields.clone(),
+                    is_opaque: false,
+                },
+            ),
         };
     }
 
@@ -344,7 +495,13 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
         })
         .collect();
 
-    (CheckedProgram { functions }, errors)
+    (
+        CheckedProgram {
+            functions,
+            structs: context.known_structs.into_values().collect(),
+        },
+        errors,
+    )
 }
 
 fn typecheck_block(
@@ -451,18 +608,82 @@ fn typecheck_expression(
 ) -> (CheckedExpression, Vec<TypeCheckError>) {
     match expression {
         ParsedExpression::Literal(literal) => match literal {
-            Literal::String(_, _) => (
-                CheckedExpression::Literal(literal.clone(), Type::String),
+            Literal::String(value, _) => (
+                CheckedExpression::Literal(CheckedLiteral::String(value.clone(), Type::String)),
                 vec![],
             ),
-            Literal::Int(_, _) => (
-                CheckedExpression::Literal(literal.clone(), Type::GenericInt),
+            Literal::Int(value, _) => (
+                CheckedExpression::Literal(CheckedLiteral::Int(*value, Type::GenericInt)),
                 vec![],
             ),
-            Literal::Bool(_, _) => (
-                CheckedExpression::Literal(literal.clone(), Type::Bool),
+            Literal::Bool(value, _) => (
+                CheckedExpression::Literal(CheckedLiteral::Bool(*value, Type::Bool)),
                 vec![],
             ),
+            Literal::Struct(struct_literal, _) => {
+                let mut errors = vec![];
+
+                let checked_fields: Vec<(String, CheckedExpression)> = struct_literal
+                    .fields
+                    .iter()
+                    .map(|(field_name, _, field_value)| {
+                        let (checked_field_value, mut errs) =
+                            typecheck_expression(context, field_value);
+                        errors.append(&mut errs);
+                        (field_name.clone(), checked_field_value)
+                    })
+                    .collect();
+
+                if let Some(r#struct) = context.known_structs.get(&struct_literal.name) {
+                    for field_name in r#struct.fields.keys() {
+                        if !checked_fields.iter().any(|(name, _)| name == field_name) {
+                            errors.push(TypeCheckError::StructMissingField(
+                                struct_literal.name.clone(),
+                                field_name.clone(),
+                                struct_literal.span,
+                            ));
+                        }
+                    }
+
+                    for ((field_name, checked_field), (_, field_name_span, parsed_field)) in
+                        checked_fields.iter().zip(struct_literal.fields.iter())
+                    {
+                        if let Some(field_type) = r#struct.fields.get(field_name) {
+                            if !checked_field.ttype().matches(field_type) {
+                                errors.push(TypeCheckError::StructFieldWrongType(
+                                    struct_literal.name.clone(),
+                                    field_name.clone(),
+                                    checked_field.ttype(),
+                                    field_type.clone(),
+                                    parsed_field.span(),
+                                ))
+                            }
+                        } else {
+                            errors.push(TypeCheckError::StructSuperfluousField(
+                                struct_literal.name.clone(),
+                                field_name.clone(),
+                                *field_name_span,
+                            ));
+                        }
+                    }
+                } else {
+                    errors.push(TypeCheckError::UnknownType(
+                        struct_literal.name.clone(),
+                        struct_literal.name_span,
+                    ));
+                }
+
+                (
+                    CheckedExpression::Literal(CheckedLiteral::Struct(
+                        CheckedStructLiteral {
+                            name: struct_literal.name.clone(),
+                            fields: checked_fields,
+                        },
+                        Type::UserDefined(struct_literal.name.clone()),
+                    )),
+                    errors,
+                )
+            }
         },
         ParsedExpression::FunctionCall(func_call) => {
             let mut errors = vec![];
@@ -565,6 +786,46 @@ fn typecheck_expression(
                     Box::new(checked_lhs),
                     Box::new(checked_rhs),
                     *op,
+                    ttype,
+                ),
+                errors,
+            )
+        }
+        ParsedExpression::FieldAccess(field_access) => {
+            let (checked_object, mut errors) = typecheck_expression(context, &field_access.object);
+            let obj_type = checked_object.ttype();
+
+            let ttype = if let Some(r#struct) = context.known_structs.get(&obj_type.to_str()) {
+                if r#struct.is_opaque {
+                    errors.push(TypeCheckError::OpaqueStructFieldAccess(
+                        obj_type,
+                        field_access.field_name_span,
+                    ));
+                    Type::Incomplete
+                } else if let Some(field_type) = r#struct.fields.get(&field_access.field_name) {
+                    field_type.clone()
+                } else {
+                    errors.push(TypeCheckError::FieldAccessInvalidField(
+                        obj_type,
+                        field_access.field_name.clone(),
+                        field_access.field_name_span,
+                    ));
+                    Type::Incomplete
+                }
+            } else {
+                errors.push(TypeCheckError::ObjectIsNotAStruct(
+                    obj_type,
+                    field_access.object_span,
+                ));
+                Type::Incomplete
+            };
+
+            (
+                CheckedExpression::FieldAccess(
+                    CheckedFieldAccess {
+                        object: Box::new(checked_object),
+                        field_name: field_access.field_name.clone(),
+                    },
                     ttype,
                 ),
                 errors,

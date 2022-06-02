@@ -1,0 +1,15 @@
+extern fn print(s: string);
+
+struct Person {
+  name: string,
+  age: int,
+}
+
+fn main() {
+  let bob = Person {
+    name: "Bob",
+    age: 27,
+  };
+
+  print(bob.name);
+}
