@@ -594,10 +594,11 @@ fn parse_if_else(tokens: &[Token], idx: &mut usize) -> (ParsedIfElse, Vec<ParseE
 }
 
 fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec<ParseError>) {
-    let (expr, mut errors) = match &tokens[*idx] {
-        tok @ Token {
-            kind: TokenKind::Ident(name),
-            ..
+    let (expr, mut errors) = loop {
+        let mut errors = vec![];
+        break match &tokens[*idx] {
+            tok @ Token {
+                kind: TokenKind::Ident(name),
         } => {
             if let Some(Token {
                 kind: TokenKind::OParen,
@@ -606,43 +607,47 @@ fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec
             {
                 let (func_call, errors) = parse_function_call(tokens, idx);
                 (ParsedExpression::FunctionCall(func_call), errors)
-            } else {
+                    *idx += 1;
+                    (ParsedExpression::Variable(name.clone(), tok.span()), errors)
+                }
+            },
+            tok @ Token {
+                kind: TokenKind::StringLiteral(string),
+                ..
+            } => {
                 *idx += 1;
-                (ParsedExpression::Variable(name.clone(), tok.span()), vec![])
+                (
+                    ParsedExpression::Literal(Literal::String(string.clone(), tok.span())),
+                    errors,
+                )
             }
-        }
-        tok @ Token {
-            kind: TokenKind::StringLiteral(string),
-            ..
-        } => {
-            *idx += 1;
-            (
-                ParsedExpression::Literal(Literal::String(string.clone(), tok.span())),
-                vec![],
-            )
-        }
-        tok @ Token {
-            kind: TokenKind::IntLiteral(int),
-            ..
-        } => {
-            *idx += 1;
-            (
-                ParsedExpression::Literal(Literal::Int(*int, tok.span())),
-                vec![],
-            )
-        }
-        tok @ Token {
-            kind: TokenKind::True | TokenKind::False,
-            ..
-        } => {
-            *idx += 1;
-            let bool_value = matches!(tok.kind, TokenKind::True);
-            (
-                ParsedExpression::Literal(Literal::Bool(bool_value, tok.span())),
-                vec![],
-            )
-        }
-        t => panic!("unexpected token {:?}", t),
+            tok @ Token {
+                kind: TokenKind::IntLiteral(int),
+                ..
+            } => {
+                *idx += 1;
+                (
+                    ParsedExpression::Literal(Literal::Int(*int, tok.span())),
+                    errors,
+                )
+            }
+            tok @ Token {
+                kind: TokenKind::True | TokenKind::False,
+                ..
+            } => {
+                *idx += 1;
+                let bool_value = matches!(tok.kind, TokenKind::True);
+                (
+                    ParsedExpression::Literal(Literal::Bool(bool_value, tok.span())),
+                    errors,
+                )
+            }
+            tok => {
+                errors.push(ParseError::UnexpectedToken(tok.span()));
+                *idx += 1;
+                continue;
+            }
+        };
     };
 
     let expr = if let Some(
