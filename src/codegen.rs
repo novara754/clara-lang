@@ -58,10 +58,10 @@ fn write_stmt(
             for stmt in &while_loop.body.statements {
                 write_stmt(w, indent + 1, stmt)?;
             }
-            write_indented!(w, indent, "}}\n")?;
+            write_indented!(w, indent, "}}")?;
         }
     }
-    write_indented!(w, indent, ";\n")
+    writeln!(w, ";")
 }
 
 fn write_expr(w: &mut impl std::io::Write, expr: &CheckedExpression) -> std::io::Result<()> {
