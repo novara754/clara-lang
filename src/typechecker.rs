@@ -5,8 +5,8 @@ use ariadne::{Color, Label, Report, ReportKind};
 use crate::{
     error::ReportError,
     parser::{
-        FunctionParameter, Literal, ParsedBlock, ParsedExpression, ParsedProgram, ParsedStatement,
-        ParsedStruct,
+        BinaryOperation, FunctionParameter, Literal, ParsedBlock, ParsedExpression, ParsedProgram,
+        ParsedStatement, ParsedStruct,
     },
     span::{Span, Spanned},
 };
@@ -15,21 +15,40 @@ use crate::{
 pub enum Type {
     UserDefined(String),
     Pointer(Box<Type>),
+    GenericInt,
     String,
     Int,
     Bool,
     Unit,
     CChar,
+    CInt,
     Incomplete,
 }
 
 impl Type {
+    pub fn is_integer_type(&self) -> bool {
+        matches!(self, Self::GenericInt | Self::CInt | Self::Int)
+    }
+
+    pub fn matches(&self, other: &Type) -> bool {
+        if self == other {
+            true
+        } else {
+            match (self, other) {
+                (Self::GenericInt, _) => other.is_integer_type(),
+                (_, Self::GenericInt) => self.is_integer_type(),
+                _ => false,
+            }
+        }
+    }
+
     pub fn from_str(typename: &str) -> Self {
         match typename {
             "string" => Type::String,
             "int" => Type::Int,
             "bool" => Type::Bool,
             "c_char" => Type::CChar,
+            "c_int" => Type::CInt,
             "()" => Type::Unit,
             _ => Type::UserDefined(typename.to_string()),
         }
@@ -37,12 +56,14 @@ impl Type {
 
     pub fn to_str(&self) -> String {
         match self {
+            Self::GenericInt => "{integer}".to_string(),
             Self::Pointer(ty) => format!("->{}", ty.to_str()),
             Self::String => "string".to_string(),
             Self::Int => "int".to_string(),
             Self::Bool => "bool".to_string(),
             Self::Unit => "unit".to_string(),
             Self::CChar => "c_char".to_string(),
+            Self::CInt => "c_int".to_string(),
             Self::Incomplete => "incomplete type".to_string(),
             Self::UserDefined(name) => name.clone(),
         }
@@ -50,12 +71,17 @@ impl Type {
 
     pub fn to_c(&self) -> String {
         match self {
+            // TODO: Maybe handle this case better?
+            Self::GenericInt => {
+                panic!("attempted to instantiate generic integer type in c codegen")
+            }
             Self::Pointer(ty) => format!("{}*", ty.to_str()),
             Self::String => "string".to_string(),
             Self::Int => "int".to_string(),
             Self::Bool => "bool".to_string(),
             Self::Unit => "unit".to_string(),
             Self::CChar => "c_char".to_string(),
+            Self::CInt => "c_int".to_string(),
             Self::Incomplete => "incomplete type".to_string(),
             Self::UserDefined(name) => name.clone(),
         }
@@ -173,6 +199,7 @@ impl CheckedExpression {
             Self::Literal(_literal, ttype) => ttype.clone(),
             Self::FunctionCall(func_call) => func_call.ttype.clone(),
             Self::Variable(_name, ttype) => ttype.clone(),
+            Self::BinaryOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
         }
     }
 }
@@ -387,7 +414,7 @@ fn typecheck_expression(
                 vec![],
             ),
             Literal::Int(_, _) => (
-                CheckedExpression::Literal(literal.clone(), Type::Int),
+                CheckedExpression::Literal(literal.clone(), Type::GenericInt),
                 vec![],
             ),
             Literal::Bool(_, _) => (
@@ -474,7 +501,7 @@ fn typecheck_expression(
             let (checked_rhs, mut errs) = typecheck_expression(context, rhs);
             errors.append(&mut errs);
 
-            if checked_lhs.ttype() != checked_rhs.ttype() {
+            if !checked_lhs.ttype().matches(&checked_rhs.ttype()) {
                 errors.push(TypeCheckError::BinaryOpMismatch(
                     checked_lhs.ttype(),
                     checked_rhs.ttype(),

@@ -6,6 +6,7 @@
 #include <stdbool.h>
 
 typedef char c_char;
+typedef int c_int;
 
 /**
  * A string with associated data and length.

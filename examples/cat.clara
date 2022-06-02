@@ -2,8 +2,18 @@ opaque struct FILE;
 extern fn c_string(s: string): ->c_char;
 extern fn fopen(path: ->c_char, mode: ->c_char): ->FILE;
 extern fn fclose(stream: ->FILE): c_int;
+extern fn fgetc(stream: ->FILE): c_int;
+extern fn feof(stream: ->FILE): c_int;
+extern fn putchar(c: c_int);
+extern fn print(s: string);
 
 fn main() {
   let file = fopen(c_string("./Cargo.toml"), c_string("r"));
+
+  while feof(file) == 0 {
+    let ch = fgetc(file);
+    putchar(ch);
+  }
+
   fclose(file);
 }
