@@ -649,8 +649,8 @@ fn parse_if_else(tokens: &[Token], idx: &mut usize) -> (ParsedIfElse, Vec<ParseE
 }
 
 fn parse_expression(tokens: &[Token], idx: &mut usize) -> (ParsedExpression, Vec<ParseError>) {
+    let mut errors = vec![];
     let (expr, mut errors) = loop {
-        let mut errors = vec![];
         break match &tokens[*idx] {
             tok @ Token {
                 kind: TokenKind::Ident(name),
