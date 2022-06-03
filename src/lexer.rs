@@ -220,8 +220,6 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 idx += 1;
             }
 
-            errors.push(LexError::InvalidInt(Span::new(start, idx - start)));
-
             let int_value =
                 if let Ok(int_value) = std::str::from_utf8(&source[start..idx]).unwrap().parse() {
                     int_value
