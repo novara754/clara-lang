@@ -38,8 +38,6 @@ impl Type {
             match (self, other) {
                 (Self::GenericInt, _) => other.is_integer_type(),
                 (_, Self::GenericInt) => self.is_integer_type(),
-                (Self::String, Self::Pointer(box Self::CChar)) => true,
-                (Self::Pointer(box Self::CChar), Self::String) => true,
                 _ => false,
             }
         }
@@ -746,7 +744,10 @@ fn typecheck_expression(
     match expression {
         ParsedExpression::Literal(literal) => match literal {
             Literal::String(value, _) => (
-                CheckedExpression::Literal(CheckedLiteral::String(value.clone(), Type::String)),
+                CheckedExpression::Literal(CheckedLiteral::String(
+                    value.clone(),
+                    Type::Pointer(Box::new(Type::CChar)),
+                )),
                 vec![],
             ),
             Literal::Int(value, _) => (

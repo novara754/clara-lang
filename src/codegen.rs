@@ -56,6 +56,7 @@ struct EmitContext {
     current_function: Option<*mut LLVMValue>,
     current_block: Option<LLVMBasicBlockRef>,
     known_functions: HashMap<String, (*mut LLVMValue, *mut LLVMType)>,
+    known_structs: HashMap<String, *mut LLVMType>,
     scope_stack: ScopeStack,
 }
 
@@ -104,6 +105,7 @@ pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre:
                 current_function: None,
                 current_block: None,
                 known_functions: HashMap::new(),
+                known_structs: HashMap::new(),
                 scope_stack: ScopeStack { scopes: vec![] },
             },
             program,
@@ -135,14 +137,45 @@ pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre:
 unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre::Result<()> {
     let void = llvm::core::LLVMVoidTypeInContext(ctx.context);
 
+    for struc in &program.structs {
+        let mut fields: Vec<_> = struc
+            .fields
+            .iter()
+            .map(|field| type_to_llvm(ctx, field.1))
+            .collect();
+        let struct_type = llvm::core::LLVMStructCreateNamed(
+            ctx.context,
+            CString::new(struc.name.as_str())?.as_ptr(),
+        );
+
+        if !struc.is_opaque {
+            llvm::core::LLVMStructSetBody(
+                struct_type,
+                fields.as_mut_ptr() as *mut _,
+                fields.len().try_into()?,
+                0,
+            );
+        }
+
+        assert!(ctx
+            .known_structs
+            .insert(struc.name.clone(), struct_type)
+            .is_none());
+    }
+
     for func in &program.extern_functions {
         let mut params: Vec<_> = func
             .parameters
             .iter()
             .map(|param| type_to_llvm(ctx, &param.ttype))
             .collect();
-        let function_type =
-            llvm::core::LLVMFunctionType(void, params.as_mut_ptr(), params.len().try_into()?, 0);
+        let return_type = type_to_llvm(ctx, &func.return_type);
+        let function_type = llvm::core::LLVMFunctionType(
+            return_type,
+            params.as_mut_ptr(),
+            params.len().try_into()?,
+            0,
+        );
         let function = llvm::core::LLVMAddFunction(
             ctx.module,
             CString::new(func.name.as_str())?.as_ptr(),
@@ -167,7 +200,14 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
             .insert(func.name.clone(), (function, function_type));
 
         ctx.current_function = Some(function);
-        emit_block(ctx, &func.body)?;
+
+        let bb = llvm::core::LLVMAppendBasicBlockInContext(
+            ctx.context,
+            ctx.current_function.unwrap(),
+            b"\0".as_ptr() as *const _,
+        );
+        emit_block(ctx, &func.body, bb)?;
+
         llvm::core::LLVMBuildRetVoid(ctx.builder);
         ctx.current_function.take();
     }
@@ -178,14 +218,9 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
 unsafe fn emit_block(
     ctx: &mut EmitContext,
     block: &CheckedBlock,
-) -> eyre::Result<LLVMBasicBlockRef> {
-    let bb = llvm::core::LLVMAppendBasicBlockInContext(
-        ctx.context,
-        ctx.current_function.unwrap(),
-        b"\0".as_ptr() as *const _,
-    );
+    bb: LLVMBasicBlockRef,
+) -> eyre::Result<()> {
     llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, bb);
-
     ctx.current_block = Some(bb);
 
     ctx.scope_stack.push_scope();
@@ -194,9 +229,7 @@ unsafe fn emit_block(
     }
     ctx.scope_stack.pop_scope();
 
-    ctx.current_block.take();
-
-    Ok(bb)
+    Ok(())
 }
 
 unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) -> eyre::Result<()> {
@@ -207,40 +240,68 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
         CheckedStatement::LetAssign(variable_name, value_expr) => {
             let value = emit_expression(ctx, value_expr)?;
             let var_type = type_to_llvm(ctx, &value_expr.ttype());
-            let var = llvm::core::LLVMBuildAlloca(
-                ctx.builder,
-                var_type,
-                CString::new(variable_name.as_str())?.as_ptr(),
-            );
+            let var =
+                llvm::core::LLVMBuildAlloca(ctx.builder, var_type, b"\0".as_ptr() as *const _);
             llvm::core::LLVMBuildStore(ctx.builder, value, var);
             ctx.scope_stack.add_variable(variable_name.clone(), var);
         }
         CheckedStatement::IfElse(if_else) => {
-            let condition = emit_expression(ctx, &if_else.condition)?;
-
-            let current_block = ctx.current_block.unwrap();
-
-            let if_block = emit_block(ctx, &if_else.if_body)?;
-            let else_block = emit_block(ctx, &if_else.else_body)?;
-
-            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, current_block);
-            llvm::core::LLVMBuildCondBr(ctx.builder, condition, if_block, else_block);
-
+            let if_block = llvm::core::LLVMAppendBasicBlockInContext(
+                ctx.context,
+                ctx.current_function.unwrap(),
+                b"if_block\0".as_ptr() as *const _,
+            );
+            let else_block = llvm::core::LLVMAppendBasicBlockInContext(
+                ctx.context,
+                ctx.current_function.unwrap(),
+                b"else_block\0".as_ptr() as *const _,
+            );
             let after_if_else = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"asd\0".as_ptr() as *const _,
+                b"after_if_else\0".as_ptr() as *const _,
             );
 
-            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, if_block);
+            let condition = emit_expression(ctx, &if_else.condition)?;
+            llvm::core::LLVMBuildCondBr(ctx.builder, condition, if_block, else_block);
+
+            emit_block(ctx, &if_else.if_body, if_block)?;
             llvm::core::LLVMBuildBr(ctx.builder, after_if_else);
 
-            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, else_block);
+            emit_block(ctx, &if_else.else_body, else_block)?;
             llvm::core::LLVMBuildBr(ctx.builder, after_if_else);
 
             llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, after_if_else);
         }
-        _ => todo!(),
+        CheckedStatement::WhileLoop(while_loop) => {
+            let condition_block = llvm::core::LLVMAppendBasicBlockInContext(
+                ctx.context,
+                ctx.current_function.unwrap(),
+                b"condition_block\0".as_ptr() as *const _,
+            );
+            let loop_block = llvm::core::LLVMAppendBasicBlockInContext(
+                ctx.context,
+                ctx.current_function.unwrap(),
+                b"loop_block\0".as_ptr() as *const _,
+            );
+            let after_loop_block = llvm::core::LLVMAppendBasicBlockInContext(
+                ctx.context,
+                ctx.current_function.unwrap(),
+                b"after_loop_block\0".as_ptr() as *const _,
+            );
+
+            llvm::core::LLVMBuildBr(ctx.builder, condition_block);
+
+            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, condition_block);
+            let condition = emit_expression(ctx, &while_loop.condition)?;
+            llvm::core::LLVMBuildCondBr(ctx.builder, condition, loop_block, after_loop_block);
+
+            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, loop_block);
+            emit_block(ctx, &while_loop.body, loop_block)?;
+            llvm::core::LLVMBuildBr(ctx.builder, condition_block);
+
+            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, after_loop_block);
+        }
     }
 
     Ok(())
@@ -312,7 +373,10 @@ unsafe fn emit_expression(
             let rhs = emit_expression(ctx, rhs)?;
             let predicate = match op {
                 BinaryOperation::GreaterThan => LLVMIntPredicate::LLVMIntSGT,
-                _ => todo!(),
+                BinaryOperation::Equality => LLVMIntPredicate::LLVMIntEQ,
+                BinaryOperation::GreaterThanEqual => LLVMIntPredicate::LLVMIntSGE,
+                BinaryOperation::LessThan => LLVMIntPredicate::LLVMIntSLT,
+                BinaryOperation::LessThanEqual => LLVMIntPredicate::LLVMIntSLE,
             };
             llvm::core::LLVMBuildICmp(
                 ctx.builder,
@@ -341,6 +405,13 @@ unsafe fn type_to_llvm(ctx: &mut EmitContext, ttype: &Type) -> *mut LLVMType {
         Type::GenericInt | Type::Int | Type::CInt => {
             llvm::core::LLVMInt32TypeInContext(ctx.context)
         }
-        _ => todo!(),
+        Type::Unit => llvm::core::LLVMVoidTypeInContext(ctx.context),
+        Type::UserDefined(name) => *ctx
+            .known_structs
+            .get(name)
+            .expect("user defined type should exist as determined by typechecker"),
+        Type::String => todo!(),
+        Type::Bool => llvm::core::LLVMInt1TypeInContext(ctx.context),
+        Type::Incomplete => panic!("attempted to use incomplete type in llvm codegen"),
     }
 }
