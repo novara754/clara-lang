@@ -2,7 +2,7 @@ extern fn puts(s: ->c_char);
 
 fn main() {
   let age = 20;
-  if true {
+  if age > 18 {
     puts("You can drink!");
   }else {
     puts("You cannot drink...");

@@ -54,12 +54,12 @@ struct EmitContext {
     module: *mut LLVMModule,
     builder: LLVMBuilderRef,
     current_function: Option<*mut LLVMValue>,
-    current_block: Option<*mut LLVMBasicBlockRef>,
+    current_block: Option<LLVMBasicBlockRef>,
     known_functions: HashMap<String, (*mut LLVMValue, *mut LLVMType)>,
     scope_stack: ScopeStack,
 }
 
-pub fn generate_executable(program: &CheckedProgram) -> eyre::Result<()> {
+pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre::Result<()> {
     unsafe {
         llvm::target::LLVM_InitializeAllTargetInfos();
         llvm::target::LLVM_InitializeAllTargets();
@@ -167,9 +167,9 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
             .insert(func.name.clone(), (function, function_type));
 
         ctx.current_function = Some(function);
-        emit_block(ctx, &func.body, b"entry\0")?;
-        ctx.current_function.take();
+        emit_block(ctx, &func.body)?;
         llvm::core::LLVMBuildRetVoid(ctx.builder);
+        ctx.current_function.take();
     }
 
     Ok(())
@@ -178,37 +178,34 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
 unsafe fn emit_block(
     ctx: &mut EmitContext,
     block: &CheckedBlock,
-    name: &'static [u8],
 ) -> eyre::Result<LLVMBasicBlockRef> {
     let bb = llvm::core::LLVMAppendBasicBlockInContext(
         ctx.context,
         ctx.current_function.unwrap(),
-        name.as_ptr() as *const _,
+        b"\0".as_ptr() as *const _,
     );
     llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, bb);
 
     ctx.current_block = Some(bb);
+
     ctx.scope_stack.push_scope();
     for stmt in &block.statements {
         emit_statement(ctx, stmt)?;
     }
     ctx.scope_stack.pop_scope();
-    ctx.current_block = None;
+
+    ctx.current_block.take();
 
     Ok(bb)
 }
 
-unsafe fn emit_statement(
-    ctx: &mut EmitContext,
-    statement: &CheckedStatement,
-    bb: LLVMBasicBlockRef,
-) -> eyre::Result<()> {
+unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) -> eyre::Result<()> {
     match statement {
         CheckedStatement::Expression(expr) => {
-            emit_expression(ctx, expr, bb)?;
+            emit_expression(ctx, expr)?;
         }
         CheckedStatement::LetAssign(variable_name, value_expr) => {
-            let value = emit_expression(ctx, value_expr, bb)?;
+            let value = emit_expression(ctx, value_expr)?;
             let var_type = type_to_llvm(ctx, &value_expr.ttype());
             let var = llvm::core::LLVMBuildAlloca(
                 ctx.builder,
@@ -219,10 +216,29 @@ unsafe fn emit_statement(
             ctx.scope_stack.add_variable(variable_name.clone(), var);
         }
         CheckedStatement::IfElse(if_else) => {
-            let condition = emit_expression(ctx, &if_else.condition, bb)?;
-            let if_block = emit_block(ctx, &if_else.if_body, b"then\0")?;
-            // let else_block = emit_block(ctx, &if_else.else_body)?;
-            // llvm::core::LLVMBuildCondBr(ctx.builder, condition, if_block, else_block);
+            let condition = emit_expression(ctx, &if_else.condition)?;
+
+            let current_block = ctx.current_block.unwrap();
+
+            let if_block = emit_block(ctx, &if_else.if_body)?;
+            let else_block = emit_block(ctx, &if_else.else_body)?;
+
+            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, current_block);
+            llvm::core::LLVMBuildCondBr(ctx.builder, condition, if_block, else_block);
+
+            let after_if_else = llvm::core::LLVMAppendBasicBlockInContext(
+                ctx.context,
+                ctx.current_function.unwrap(),
+                b"asd\0".as_ptr() as *const _,
+            );
+
+            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, if_block);
+            llvm::core::LLVMBuildBr(ctx.builder, after_if_else);
+
+            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, else_block);
+            llvm::core::LLVMBuildBr(ctx.builder, after_if_else);
+
+            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, after_if_else);
         }
         _ => todo!(),
     }
@@ -233,7 +249,6 @@ unsafe fn emit_statement(
 unsafe fn emit_expression(
     ctx: &mut EmitContext,
     expression: &CheckedExpression,
-    bb: LLVMBasicBlockRef,
 ) -> eyre::Result<LLVMValueRef> {
     Ok(match expression {
         CheckedExpression::Literal(literal) => match literal {
@@ -281,7 +296,7 @@ unsafe fn emit_expression(
             let mut args: Vec<LLVMValueRef> = func_call
                 .args
                 .iter()
-                .map(|expr| emit_expression(ctx, expr, bb))
+                .map(|expr| emit_expression(ctx, expr))
                 .collect::<eyre::Result<_>>()?;
             llvm::core::LLVMBuildCall2(
                 ctx.builder,
@@ -293,8 +308,8 @@ unsafe fn emit_expression(
             )
         }
         CheckedExpression::BinaryOp(lhs, rhs, op, _type) => {
-            let lhs = emit_expression(ctx, lhs, bb)?;
-            let rhs = emit_expression(ctx, rhs, bb)?;
+            let lhs = emit_expression(ctx, lhs)?;
+            let rhs = emit_expression(ctx, rhs)?;
             let predicate = match op {
                 BinaryOperation::GreaterThan => LLVMIntPredicate::LLVMIntSGT,
                 _ => todo!(),
@@ -304,12 +319,14 @@ unsafe fn emit_expression(
                 predicate,
                 lhs,
                 rhs,
-                b"bin_op".as_ptr() as *const _,
+                b"bin_op\0".as_ptr() as *const _,
             )
         }
-        CheckedExpression::Variable(variable_name, _type) => {
-            ctx.scope_stack.get_variable(variable_name)
-        }
+        CheckedExpression::Variable(variable_name, _type) => llvm::core::LLVMBuildLoad(
+            ctx.builder,
+            ctx.scope_stack.get_variable(variable_name),
+            b"\0".as_ptr() as *const _,
+        ),
         _ => todo!(),
     })
 }

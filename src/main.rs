@@ -1,7 +1,7 @@
 use ariadne::Source;
 use clap::Parser;
 use clara::{
-    codegen::native as codegen,
+    codegen,
     error::{JsonError, ReportError},
     lexer, parser, typechecker,
 };
@@ -85,5 +85,11 @@ fn main() {
         std::process::exit(1);
     }
 
-    codegen::generate_executable(&checked_program).unwrap();
+    let mut o_filepath = PathBuf::from("./build");
+    o_filepath.push(
+        source_file
+            .file_stem()
+            .unwrap_or_else(|| source_file.file_name().unwrap()),
+    );
+    codegen::generate_executable(&o_filepath, &checked_program).unwrap();
 }
