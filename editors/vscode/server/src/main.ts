@@ -25,8 +25,8 @@ let hasWorkspaceFolderCapability = false;
 connection.onInitialize((params: InitializeParams) => {
 	const capabilities = params.capabilities;
 
-	hasConfigurationCapability = Boolean(capabilities.workspace) && Boolean(capabilities.workspace.configuration);
-	hasWorkspaceFolderCapability = Boolean(capabilities.workspace) && Boolean(capabilities.workspace.workspaceFolders);
+	hasConfigurationCapability = Boolean(capabilities.workspace?.configuration);
+	hasWorkspaceFolderCapability = Boolean(capabilities.workspace?.workspaceFolders);
 	// hasDiagnosticRelatedInformationCapability =
 	// 	Boolean(capabilities.textDocument) &&
 	// 	Boolean(capabilities.textDocument.publishDiagnostics) &&
