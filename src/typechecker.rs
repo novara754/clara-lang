@@ -551,6 +551,16 @@ struct Context {
     scope_stack: ScopeStack,
 }
 
+impl Context {
+    fn type_is_defined(&self, ttype: &Type) -> bool {
+        match ttype {
+            Type::Pointer(ref subtype) => self.type_is_defined(subtype),
+            Type::UserDefined(ref name) => self.known_structs.contains_key(name),
+            _ => true,
+        }
+    }
+}
+
 pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCheckError>) {
     let mut errors = vec![];
 
@@ -604,10 +614,28 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
     let extern_functions = program
         .extern_functions
         .iter()
-        .map(|func| CheckedExternFunction {
-            name: func.name.clone(),
-            parameters: func.parameters.clone(),
-            return_type: func.return_type.clone(),
+        .map(|func| {
+            for param in &func.parameters {
+                if !context.type_is_defined(&param.ttype) {
+                    errors.push(TypeCheckError::UnknownType(
+                        param.ttype.to_str(),
+                        param.type_span,
+                    ));
+                }
+            }
+
+            if !context.type_is_defined(&func.return_type) {
+                errors.push(TypeCheckError::UnknownType(
+                    func.return_type.to_str(),
+                    func.return_type_span,
+                ));
+            }
+
+            CheckedExternFunction {
+                name: func.name.clone(),
+                parameters: func.parameters.clone(),
+                return_type: func.return_type.clone(),
+            }
         })
         .collect();
 

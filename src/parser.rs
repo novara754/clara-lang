@@ -184,6 +184,7 @@ pub struct ParsedFunction {
 pub struct FunctionParameter {
     pub name: String,
     pub ttype: Type,
+    pub type_span: Span,
 }
 
 #[derive(Debug)]
@@ -191,6 +192,7 @@ pub struct ParsedExternFunction {
     pub name: String,
     pub parameters: Vec<FunctionParameter>,
     pub return_type: Type,
+    pub return_type_span: Span,
 }
 
 #[derive(Debug)]
@@ -416,18 +418,18 @@ fn parse_extern_function(
 
     expect!(&mut errors, tokens, idx, TokenKind::CParen);
 
-    let return_type = if let Some(Token {
+    let (return_type, return_type_span) = if let Some(Token {
         kind: TokenKind::Colon,
         ..
     }) = tokens.get(*idx)
     {
         expect!(&mut errors, tokens, idx, TokenKind::Colon);
-        let (return_type, mut errs) = parse_type(tokens, idx)?;
+        let (return_type, return_type_span, mut errs) = parse_type(tokens, idx)?;
         errors.append(&mut errs);
 
-        return_type
+        (return_type, return_type_span)
     } else {
-        Type::Unit
+        (Type::Unit, Span::new(0, 0))
     };
 
     // Semicolon should be the very next token, but if there was a parse error before
@@ -439,12 +441,13 @@ fn parse_extern_function(
         name,
         parameters,
         return_type,
+        return_type_span,
     };
 
     Some((fun, errors))
 }
 
-fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Vec<ParseError>)> {
+fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Span, Vec<ParseError>)> {
     let mut errors = vec![];
 
     let is_pointer = matches!(
@@ -458,16 +461,17 @@ fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Vec<ParseError
         *idx += 1;
     }
 
-    let ttype = if let &Token {
+    let (ttype, type_span) = if let tok @ &Token {
         kind: TokenKind::Ident(ref name),
         ..
     } = tokens.get(*idx)?
     {
         *idx += 1;
-        Type::from_string(name)
+        (Type::from_string(name), tok.span())
     } else {
-        errors.push(ParseError::ExpectedIdentifier(tokens.get(*idx)?.span()));
-        Type::Unit
+        let span = tokens.get(*idx)?.span();
+        errors.push(ParseError::ExpectedIdentifier(span));
+        (Type::Unit, span)
     };
 
     let ttype = if is_pointer {
@@ -476,7 +480,7 @@ fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Vec<ParseError
         ttype
     };
 
-    Some((ttype, errors))
+    Some((ttype, type_span, errors))
 }
 
 fn parse_parameter(
@@ -499,10 +503,17 @@ fn parse_parameter(
 
     expect!(&mut errors, tokens, idx, TokenKind::Colon);
 
-    let (ttype, mut errs) = parse_type(tokens, idx)?;
+    let (ttype, type_span, mut errs) = parse_type(tokens, idx)?;
     errors.append(&mut errs);
 
-    Some((FunctionParameter { name, ttype }, errors))
+    Some((
+        FunctionParameter {
+            name,
+            ttype,
+            type_span,
+        },
+        errors,
+    ))
 }
 
 fn parse_function(tokens: &[Token], idx: &mut usize) -> Option<(ParsedFunction, Vec<ParseError>)> {
