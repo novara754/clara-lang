@@ -1,28 +1,68 @@
-use std::{io::Write, path::PathBuf, process::Command};
-
 use ariadne::Source;
-use clara::{codegen, error::ReportError, lexer, parser, typechecker};
+use clap::Parser;
+use clara::{
+    codegen,
+    error::{JsonError, ReportError},
+    lexer, parser, typechecker,
+};
+use std::{
+    io::{Read, Write},
+    path::PathBuf,
+    process::Command,
+};
+
+#[derive(Debug, Parser)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    #[clap(long)]
+    json_diagnostics: bool,
+
+    #[clap(long)]
+    no_emit: bool,
+
+    input: String,
+}
 
 fn main() {
-    let source_file = PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .expect("first program argument should be source file"),
-    );
+    let args = Args::parse();
 
-    let source = std::fs::read_to_string(&source_file)
-        .expect("first program argument should be readable source file");
+    let source_filepath = args.input;
+    let (source, source_file) = if source_filepath == "-" {
+        let mut source = String::new();
+        std::io::stdin()
+            .read_to_string(&mut source)
+            .expect("expected to be able to read source from stdin");
+        (source, PathBuf::from("./out"))
+    } else {
+        (
+            std::fs::read_to_string(&source_filepath)
+                .expect("first program argument should be readable source file"),
+            PathBuf::from(source_filepath),
+        )
+    };
 
     let (tokens, lex_errors) = lexer::lex(&source);
 
-    for e in &lex_errors {
-        e.report().print(Source::from(&source)).unwrap();
+    if args.json_diagnostics {
+        for e in &lex_errors {
+            println!("{}", e.json());
+        }
+    } else {
+        for e in &lex_errors {
+            e.report().print(Source::from(&source)).unwrap();
+        }
     }
 
     let (program, parse_errors) = parser::parse_program(&tokens, &mut 0);
 
-    for e in &parse_errors {
-        e.report().print(Source::from(&source)).unwrap();
+    if args.json_diagnostics {
+        for e in &parse_errors {
+            println!("{}", e.json());
+        }
+    } else {
+        for e in &parse_errors {
+            e.report().print(Source::from(&source)).unwrap();
+        }
     }
 
     if !lex_errors.is_empty() || !parse_errors.is_empty() {
@@ -31,8 +71,18 @@ fn main() {
 
     let (checked_program, typecheck_errors) = typechecker::typecheck_program(&program);
 
-    for e in &typecheck_errors {
-        e.report().print(Source::from(&source)).unwrap();
+    if args.json_diagnostics {
+        for e in &typecheck_errors {
+            println!("{}", e.json());
+        }
+    } else {
+        for e in &typecheck_errors {
+            e.report().print(Source::from(&source)).unwrap();
+        }
+    }
+
+    if args.no_emit {
+        std::process::exit(0);
     }
 
     if !typecheck_errors.is_empty() {

@@ -1,3 +1,5 @@
+use serde_json::json;
+
 pub trait Spanned {
     fn span(&self) -> Span;
 }
@@ -18,6 +20,13 @@ impl Span {
             start: self.start,
             len: other.start - self.start + other.len,
         }
+    }
+
+    pub fn json(self) -> serde_json::Value {
+        json!({
+            "start": self.start,
+            "len": self.len,
+        })
     }
 }
 

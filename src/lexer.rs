@@ -1,7 +1,8 @@
 use ariadne::{Color, Label, Report, ReportKind};
+use serde_json::json;
 
 use crate::{
-    error::ReportError,
+    error::{JsonError, ReportError},
     span::{Span, Spanned},
 };
 
@@ -104,6 +105,26 @@ impl ReportError for LexError {
                 ),
         }
         .finish()
+    }
+}
+
+impl JsonError for LexError {
+    fn json(&self) -> serde_json::Value {
+        use LexError::*;
+        match *self {
+            UnknownToken(c, span) => json!({
+                "message": format!("unknown character `{c}` encountered"),
+                "span": span.json(),
+            }),
+            UnterminatedString(span) => json!({
+                "message": "unterminated string",
+                "span": span.json(),
+            }),
+            InvalidInt(span) => json!({
+                "message": "invalid integer literal",
+                "span": span.json(),
+            }),
+        }
     }
 }
 

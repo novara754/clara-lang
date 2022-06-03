@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use ariadne::{Color, Label, Report, ReportKind};
+use serde_json::json;
 
 use crate::{
-    error::ReportError,
+    error::{JsonError, ReportError},
     lexer::{Token, TokenKind},
     span::{Span, Spanned},
     typechecker::Type,
@@ -35,6 +36,30 @@ impl ReportError for ParseError {
                 .with_label(Label::new(span).with_color(Color::Red)),
         }
         .finish()
+    }
+}
+
+impl JsonError for ParseError {
+    fn json(&self) -> serde_json::Value {
+        use ParseError::*;
+        match *self {
+            UnexpectedToken(span) => json!({
+                "message": "unexpected token encountered",
+                "span": span.json(),
+            }),
+            ExpectedIdentifier(span) => json!({
+                "message": "expected identifier",
+                "span": span.json(),
+            }),
+            ExpectedToken(ref kind, span) => json!({
+                "message": format!("expected token {}", kind.human_name()),
+                "span": span.json(),
+            }),
+            UnexpectedEndOfInput(span) => json!({
+                "message": "reached unexpected end of input",
+                "span": span.json(),
+            }),
+        }
     }
 }
 

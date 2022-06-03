@@ -1,3 +1,4 @@
+import * as child_process from 'child_process';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import {
 	CompletionItem,
@@ -19,17 +20,17 @@ const connection = createConnection(ProposedFeatures.all);
 
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
-let hasDiagnosticRelatedInformationCapability = false;
+// let hasDiagnosticRelatedInformationCapability = false;
 
 connection.onInitialize((params: InitializeParams) => {
 	const capabilities = params.capabilities;
 
 	hasConfigurationCapability = Boolean(capabilities.workspace) && Boolean(capabilities.workspace.configuration);
 	hasWorkspaceFolderCapability = Boolean(capabilities.workspace) && Boolean(capabilities.workspace.workspaceFolders);
-	hasDiagnosticRelatedInformationCapability =
-		Boolean(capabilities.textDocument) &&
-		Boolean(capabilities.textDocument.publishDiagnostics) &&
-		Boolean(capabilities.textDocument.publishDiagnostics.relatedInformation);
+	// hasDiagnosticRelatedInformationCapability =
+	// 	Boolean(capabilities.textDocument) &&
+	// 	Boolean(capabilities.textDocument.publishDiagnostics) &&
+	// 	Boolean(capabilities.textDocument.publishDiagnostics.relatedInformation);
 
 	const result: InitializeResult = {
 		capabilities: {
@@ -62,57 +63,63 @@ connection.onInitialized(() => {
 	}
 });
 
-function validateTextDocument(textDocument: TextDocument) {
-	const maxNumberOfProblems = 10;
+function runCompiler(sourceCode: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		try {
+			const compiler = child_process.spawn('clara', ['--json-diagnostics', '--no-emit', '-'], { stdio: 'pipe' });
 
+			compiler.stdin.setDefaultEncoding('utf-8');
+			compiler.stdin.write(sourceCode);
+			compiler.stdin.end();
+
+			let stdout = '';
+			compiler.stdout.on('data', (data) => {
+				stdout += data;
+			});
+
+			compiler.stdout.on('close', () => {
+				resolve(stdout);
+			});
+		} catch (e) {
+			reject(e);
+		}
+	});
+}
+
+async function validateTextDocument(textDocument: TextDocument) {
 	const text = textDocument.getText();
-	const pattern = /\b[A-Z]{2,}\b/g;
 
-	let m: RegExpExecArray | null;
-	let problems = 0;
-	const diagnostics: Diagnostic[] = [];
-	while ((m = pattern.exec(text)) && problems < maxNumberOfProblems) {
-		problems++;
-		const diagnostic: Diagnostic = {
-			severity: DiagnosticSeverity.Warning,
-			range: {
-				start: textDocument.positionAt(m.index),
-				end: textDocument.positionAt(m.index + m[0].length),
-			},
-			message: `${m[0]!} is all uppercase.`,
-			source: 'ex',
-		};
+	try {
+		const compilerOutput = await runCompiler(text);
 
-		if (hasDiagnosticRelatedInformationCapability) {
-			diagnostic.relatedInformation = [
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range),
-					},
-					message: 'Spelling matters',
+		const diagnostics: Diagnostic[] = [];
+		for (const line of compilerOutput.split('\n')) {
+			if (line.length === 0) {
+				continue;
+			}
+
+			interface CompilerDiagnostic {
+				span: { start: number; len: number };
+				message: string;
+			}
+
+			const diagnostic = JSON.parse(line) as CompilerDiagnostic;
+
+			diagnostics.push({
+				severity: DiagnosticSeverity.Error,
+				range: {
+					start: textDocument.positionAt(diagnostic.span.start),
+					end: textDocument.positionAt(diagnostic.span.start + diagnostic.span.len),
 				},
-				{
-					location: {
-						uri: textDocument.uri,
-						range: Object.assign({}, diagnostic.range),
-					},
-					message: 'Particularly for names',
-				},
-			];
+				message: diagnostic.message,
+				source: 'clara-language-server',
+			});
 		}
 
-		diagnostics.push(diagnostic);
+		void connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+	} catch (e) {
+		connection.console.error((e as Error).message);
 	}
-
-	diagnostics.push({
-		severity: DiagnosticSeverity.Error,
-		range: { start: textDocument.positionAt(1), end: textDocument.positionAt(2) },
-		message: 'fuick you',
-		source: 'ex',
-	});
-
-	void connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
 }
 
 documents.onDidChangeContent((change) => {

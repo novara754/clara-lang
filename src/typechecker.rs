@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use ariadne::{Color, Label, Report, ReportKind};
+use serde_json::json;
 
 use crate::{
-    error::ReportError,
+    error::{JsonError, ReportError},
     parser::{
         BinaryOperation, FunctionParameter, Literal, ParsedBlock, ParsedExpression, ParsedProgram,
         ParsedStatement, ParsedStruct,
@@ -271,6 +272,121 @@ impl ReportError for TypeCheckError {
             }
         }
         .finish()
+    }
+}
+
+impl JsonError for TypeCheckError {
+    fn json(&self) -> serde_json::Value {
+        match *self {
+            Self::WrongNumArgs(span, actual, expected) => json!({
+                "message":
+                format!(
+                    "incorrect number of arguments to function call, expected {} but found {}",
+                    expected,
+                    actual
+                ),
+                "span": span.json(),
+            }),
+            Self::WrongArgType(span, ref actual, ref expected) => json!({
+                "message":
+                    format!(
+                        "incorrect argument type in function call, expected type {} but found type {}",
+                        expected.to_str(),
+                        actual.to_str()
+                    ),
+                "span": span.json(),
+            }),
+            Self::UnknownFunction(ref function_name, span) => json!({
+                "message": format!("reference to unknown function `{}`", function_name),
+                "span": span.json(),
+            }),
+            Self::UnknownVariable(ref variable_name, ref function_name, span) => {
+                let message = if let Some(functio_name) = function_name {
+                    format!(
+                        "reference to unknown variable `{}` in function `{}`",
+                        variable_name, functio_name
+                    )
+                } else {
+                    format!("unknown variable `{}`", variable_name)
+                };
+                json!({
+                    "message": message,
+                    "span": span.json(),
+                })
+            }
+            Self::WrongConditionType(span, ref actual) => json!({
+                "message":
+                    format!(
+                        "wrong type in condition, expected `{}` but found `{}`",
+                        Type::Bool.to_str(),
+                        actual.to_str()
+                    ),
+                "span": span.json(),
+            }),
+            Self::BinaryOpMismatch(ref lhs_type, ref rhs_type, lhs_span, rhs_span) => json!({
+                "message":
+                    format!(
+                        "type mismatch in binary operator, type `{}` on the left and type `{}` on the right",
+                        lhs_type.to_str(),
+                        rhs_type.to_str()
+                    ),
+                "span": lhs_span.to(rhs_span).json(),
+            }),
+            Self::UnknownType(ref type_name, span) => json!({
+                "message": format!("reference to unknown type `{}`", type_name),
+                "span": span.json(),
+            }),
+            Self::OpaqueStructFieldAccess(ref object_type, span) => json!({
+                "message": format!("field access on opaque struct type `{}`", object_type.to_str()),
+                "span": span.json(),
+            }),
+            Self::FieldAccessInvalidField(ref object_type, ref field_name, span) => json!({
+                "message":
+                    format!(
+                        "struct type `{}` has no field by the name of `{}",
+                        object_type.to_str(),
+                        field_name
+                    ),
+                "span": span.json(),
+            }),
+
+            Self::ObjectIsNotAStruct(ref object_type, span) => json!({
+                "message": format!("object of type `{}` is not a struct", object_type.to_str()),
+                "span": span.json(),
+            }),
+            Self::StructMissingField(ref struct_name, ref missing_field_name, span) => json!({
+                "message":
+                    format!(
+                        "initializer for field `{}` missing in struct literal for struct type `{}`",
+                        missing_field_name,
+                        struct_name
+                    ),
+                "span": span.json(),
+            }),
+            Self::StructFieldWrongType(
+                ref _struct_name,
+                ref field_name,
+                ref actual,
+                ref expected,
+                span,
+            ) => json!({
+                "message":
+                    format!(
+                        "field `{}` has incorrect type, expected `{}` but found `{}`",
+                        field_name,
+                        expected.to_str(),
+                        actual.to_str()
+                    ),
+                "span": span.json(),
+            }),
+            Self::StructSuperfluousField(ref struct_name, ref field_name, span) => json!({
+                "message":
+                    format!(
+                        "struct type `{struct_name}` has no field by the name of `{field_name}`"
+                    ),
+                "span": span.json(),
+            }),
+        }
     }
 }
 

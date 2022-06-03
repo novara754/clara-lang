@@ -10,8 +10,6 @@ extern fn print(s: string);
 fn main() {
   let file = fopen(c_string("./Cargo.toml"), c_string("r"));
 
-  AAAA
-
   while feof(file) == 0 {
     let ch = fgetc(file);
     putchar(ch);
