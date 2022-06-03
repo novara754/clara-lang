@@ -1,0 +1,6 @@
+extern fn putchar(c: c_int);
+
+fn main() {
+  putchar(65);
+  putchar(10);
+}

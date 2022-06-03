@@ -7,3 +7,5 @@ edition = "2021"
 ariadne = "0.1.5"
 clap = { version = "3.1.18", features = ["derive"] }
 serde_json = "1.0.81"
+llvm-sys = "130"
+eyre = "0.6.8"

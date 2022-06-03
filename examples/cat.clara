@@ -8,7 +8,7 @@ extern fn putchar(c: c_int);
 extern fn print(s: string);
 
 fn main() {
-  let file = fopen(c_string("./Cargo.toml"), c_string("r"));
+  let file = fopen("./Cargo.toml", "r");
 
   while feof(file) == 0 {
     let ch = fgetc(file);

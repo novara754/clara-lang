@@ -38,6 +38,8 @@ impl Type {
             match (self, other) {
                 (Self::GenericInt, _) => other.is_integer_type(),
                 (_, Self::GenericInt) => self.is_integer_type(),
+                (Self::String, Self::Pointer(box Self::CChar)) => true,
+                (Self::Pointer(box Self::CChar), Self::String) => true,
                 _ => false,
             }
         }
@@ -459,7 +461,7 @@ pub struct CheckedWhileLoop {
 pub struct CheckedIfElse {
     pub condition: CheckedExpression,
     pub if_body: CheckedBlock,
-    pub else_body: Option<CheckedBlock>,
+    pub else_body: CheckedBlock,
 }
 
 #[derive(Debug)]
@@ -482,6 +484,13 @@ pub struct CheckedFunction {
 }
 
 #[derive(Debug)]
+pub struct CheckedExternFunction {
+    pub name: String,
+    pub parameters: Vec<FunctionParameter>,
+    pub return_type: Type,
+}
+
+#[derive(Debug)]
 pub struct Struct {
     pub name: String,
     pub fields: HashMap<String, Type>,
@@ -490,6 +499,7 @@ pub struct Struct {
 
 #[derive(Debug)]
 pub struct CheckedProgram {
+    pub extern_functions: Vec<CheckedExternFunction>,
     pub functions: Vec<CheckedFunction>,
     pub structs: Vec<Struct>,
 }
@@ -593,6 +603,16 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
         };
     }
 
+    let extern_functions = program
+        .extern_functions
+        .iter()
+        .map(|func| CheckedExternFunction {
+            name: func.name.clone(),
+            parameters: func.parameters.clone(),
+            return_type: func.return_type.clone(),
+        })
+        .collect();
+
     let functions = program
         .functions
         .iter()
@@ -614,6 +634,7 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
     (
         CheckedProgram {
             functions,
+            extern_functions,
             structs: context.known_structs.into_values().collect(),
         },
         errors,
@@ -700,9 +721,9 @@ fn typecheck_statement(
             let checked_else_body = if let Some(ref else_body) = if_else.else_body {
                 let (checked_else_body, mut errs) = typecheck_block(context, else_body);
                 errors.append(&mut errs);
-                Some(checked_else_body)
+                checked_else_body
             } else {
-                None
+                CheckedBlock { statements: vec![] }
             };
 
             (
@@ -828,7 +849,7 @@ fn typecheck_expression(
                     .zip(func_call.args.iter())
                     .zip(func.parameters.iter())
                 {
-                    if checked_arg.ttype() != param.ttype {
+                    if !checked_arg.ttype().matches(&param.ttype) {
                         errors.push(TypeCheckError::WrongArgType(
                             arg.span(),
                             checked_arg.ttype(),

@@ -73,9 +73,7 @@ fn write_stmt(
             writeln!(w, ")")?;
             write_block(w, indent, &if_else.if_body)?;
             write_indented!(w, indent, "else\n")?;
-            if let Some(ref else_body) = if_else.else_body {
-                write_block(w, indent, else_body)?;
-            }
+            write_block(w, indent, &if_else.else_body)?;
         }
     }
     writeln!(w, ";")

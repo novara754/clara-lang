@@ -1,5 +1,5 @@
-extern fn print(msg: string);
+extern fn puts(msg: ->c_char);
 
 fn main() {
-  print("hello, world!");
+  puts("hello, world!");
 }
