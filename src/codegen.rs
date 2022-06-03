@@ -20,15 +20,17 @@ pub fn generate_c(w: &mut impl std::io::Write, program: &CheckedProgram) -> std:
     writeln!(w, "#include <lib.h>")?;
 
     for r#struct in &program.structs {
-        write!(w, "typedef struct {}", r#struct.name)?;
         if !r#struct.is_opaque {
+            write!(w, "typedef struct {}", r#struct.name)?;
+
             writeln!(w, "{{")?;
             for (field_name, field_type) in &r#struct.fields {
                 writeln!(w, "\t{} {};", field_type.to_c(), field_name)?;
             }
             write!(w, "}} {}", r#struct.name)?;
+
+            writeln!(w, ";\n")?;
         }
-        writeln!(w, ";\n")?;
     }
 
     for func in &program.functions {
