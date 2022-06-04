@@ -54,7 +54,6 @@ struct EmitContext {
     module: *mut LLVMModule,
     builder: LLVMBuilderRef,
     current_function: Option<*mut LLVMValue>,
-    current_block: Option<LLVMBasicBlockRef>,
     known_functions: HashMap<String, (*mut LLVMValue, *mut LLVMType)>,
     known_structs: HashMap<String, *mut LLVMType>,
     scope_stack: ScopeStack,
@@ -103,7 +102,6 @@ pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre:
                 module,
                 builder,
                 current_function: None,
-                current_block: None,
                 known_functions: HashMap::new(),
                 known_structs: HashMap::new(),
                 scope_stack: ScopeStack { scopes: vec![] },
@@ -221,7 +219,6 @@ unsafe fn emit_block(
     bb: LLVMBasicBlockRef,
 ) -> eyre::Result<()> {
     llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, bb);
-    ctx.current_block = Some(bb);
 
     ctx.scope_stack.push_scope();
     for stmt in &block.statements {
