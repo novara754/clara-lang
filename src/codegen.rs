@@ -138,7 +138,8 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
             .fields
             .iter()
             .map(|field| type_to_llvm(ctx, &field.1))
-            .collect();
+            .collect::<eyre::Result<_>>()?;
+
         let struct_type = llvm::core::LLVMStructCreateNamed(
             ctx.context,
             CString::new(struc.name.as_str())?.as_ptr(),
@@ -164,8 +165,8 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
             .parameters
             .iter()
             .map(|param| type_to_llvm(ctx, &param.ttype))
-            .collect();
-        let return_type = type_to_llvm(ctx, &func.return_type);
+            .collect::<eyre::Result<_>>()?;
+        let return_type = type_to_llvm(ctx, &func.return_type)?;
         let function_type = llvm::core::LLVMFunctionType(
             return_type,
             params.as_mut_ptr(),
@@ -188,8 +189,8 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
             .parameters
             .iter()
             .map(|param| type_to_llvm(ctx, &param.ttype))
-            .collect();
-        let return_type = type_to_llvm(ctx, &func.return_type);
+            .collect::<eyre::Result<_>>()?;
+        let return_type = type_to_llvm(ctx, &func.return_type)?;
         let function_type = llvm::core::LLVMFunctionType(
             return_type,
             params.as_mut_ptr(),
@@ -217,7 +218,7 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
         llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, bb);
 
         for (param_idx, param) in func.parameters.iter().enumerate() {
-            let param_type_ref = type_to_llvm(ctx, &param.ttype);
+            let param_type_ref = type_to_llvm(ctx, &param.ttype)?;
             let param_storage = llvm::core::LLVMBuildAlloca(
                 ctx.builder,
                 param_type_ref,
@@ -266,7 +267,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
         }
         CheckedStatement::LetAssign(variable_name, value_expr) => {
             let value = emit_expression(ctx, value_expr)?;
-            let var_type = type_to_llvm(ctx, &value_expr.ttype());
+            let var_type = type_to_llvm(ctx, &value_expr.ttype())?;
             let var =
                 llvm::core::LLVMBuildAlloca(ctx.builder, var_type, b"\0".as_ptr() as *const _);
             llvm::core::LLVMBuildStore(ctx.builder, value, var);
@@ -352,7 +353,7 @@ unsafe fn emit_expression(
     Ok(match expression {
         CheckedExpression::Literal(literal) => match literal {
             CheckedLiteral::Int(value, ttype) => {
-                let int_type = type_to_llvm(ctx, ttype);
+                let int_type = type_to_llvm(ctx, ttype)?;
                 llvm::core::LLVMConstInt(int_type, *value as u64, 1)
             }
             CheckedLiteral::Bool(value, _type) => {
@@ -389,7 +390,7 @@ unsafe fn emit_expression(
                 str
             }
             CheckedLiteral::Struct(struct_literal, r#struct, struct_type) => {
-                let struct_type_ref = type_to_llvm(ctx, struct_type);
+                let struct_type_ref = type_to_llvm(ctx, struct_type)?;
 
                 let mut field_values: Vec<LLVMValueRef> = r#struct
                     .fields
@@ -407,6 +408,24 @@ unsafe fn emit_expression(
                     struct_type_ref,
                     field_values.as_mut_ptr(),
                     field_values.len().try_into()?,
+                )
+            }
+            CheckedLiteral::Array(array_literal, _array_type) => {
+                let element_type = array_literal
+                    .element_type
+                    .as_ref()
+                    .expect("emitting generic arrays is not supported");
+
+                let mut elements: Vec<_> = array_literal
+                    .elements
+                    .iter()
+                    .map(|elem| emit_expression(ctx, elem))
+                    .collect::<eyre::Result<_>>()?;
+
+                llvm::core::LLVMConstArray(
+                    type_to_llvm(ctx, element_type)?,
+                    elements.as_mut_ptr(),
+                    elements.len().try_into()?,
                 )
             }
         },
@@ -474,7 +493,7 @@ unsafe fn emit_expression(
                 .expect("existence of field in field access was established by typechecker");
             let object = emit_expression(ctx, &field_access.object)?;
 
-            let object_type = type_to_llvm(ctx, &field_access.object.ttype());
+            let object_type = type_to_llvm(ctx, &field_access.object.ttype())?;
             let object_storage =
                 llvm::core::LLVMBuildAlloca(ctx.builder, object_type, b"\0".as_ptr() as *const _);
 
@@ -493,10 +512,10 @@ unsafe fn emit_expression(
     })
 }
 
-unsafe fn type_to_llvm(ctx: &mut EmitContext, ttype: &Type) -> *mut LLVMType {
-    match ttype {
+unsafe fn type_to_llvm(ctx: &mut EmitContext, ttype: &Type) -> eyre::Result<*mut LLVMType> {
+    Ok(match ttype {
         Type::Pointer(subtype) => {
-            let subtype = type_to_llvm(ctx, subtype);
+            let subtype = type_to_llvm(ctx, subtype)?;
             llvm::core::LLVMPointerType(subtype, 0)
         }
         Type::CChar => llvm::core::LLVMInt8TypeInContext(ctx.context),
@@ -510,6 +529,10 @@ unsafe fn type_to_llvm(ctx: &mut EmitContext, ttype: &Type) -> *mut LLVMType {
             .expect("user defined type should exist as determined by typechecker"),
         Type::String => todo!(),
         Type::Bool => llvm::core::LLVMInt1TypeInContext(ctx.context),
+        Type::GenericEmptyArray => todo!(),
+        Type::Array(element_type, size) => {
+            llvm::core::LLVMArrayType(type_to_llvm(ctx, element_type)?, (*size).try_into()?)
+        }
         Type::Incomplete => panic!("attempted to use incomplete type in llvm codegen"),
-    }
+    })
 }

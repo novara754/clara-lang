@@ -23,6 +23,8 @@ pub enum Type {
     Unit,
     CChar,
     CInt,
+    GenericEmptyArray,
+    Array(Box<Type>, usize),
     Incomplete,
 }
 
@@ -67,6 +69,8 @@ impl Type {
             Self::CInt => "c_int".to_string(),
             Self::Incomplete => "incomplete type".to_string(),
             Self::UserDefined(name) => name.clone(),
+            Self::GenericEmptyArray => "[_; 0]".to_string(),
+            Self::Array(elem_type, size) => format!("[{}; {size}]", elem_type.to_str()),
         }
     }
 }
@@ -89,6 +93,7 @@ pub enum TypeCheckError {
     DuplicateParameterName(String, Span),
     DuplicateVariableName(String, Span),
     DuplicateFuncStructName(String, Span),
+    WrongElementTypeInArray(Type, Type, Span),
 }
 
 impl ReportError for TypeCheckError {
@@ -301,6 +306,20 @@ impl ReportError for TypeCheckError {
                             .with_color(Color::Red),
                     )
             }
+            Self::WrongElementTypeInArray(ref actual, ref expected, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("wrong type for element in array literal")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "expression has type `{}` but array expected type `{}`",
+                                actual.to_str(),
+                                expected.to_str()
+                            ))
+                            .with_color(Color::Red),
+                    )
+                    .with_note("All elements of an array must have the same type")
+            }
         }
         .finish()
     }
@@ -438,6 +457,15 @@ impl JsonError for TypeCheckError {
                 "message": format!("function or struct name `{name}` used more than once"),
                 "span": span.json(),
             }),
+            Self::WrongElementTypeInArray(ref actual, ref expected, span) => json!({
+                "message":
+                    format!(
+                        "element has type `{}` but array expected type `{}`",
+                        actual.to_str(),
+                        expected.to_str()
+                    ),
+                    "span": span.json(),
+            }),
         }
     }
 }
@@ -456,11 +484,18 @@ pub struct CheckedStructLiteral {
 }
 
 #[derive(Debug)]
+pub struct CheckedArrayLiteral {
+    pub elements: Vec<CheckedExpression>,
+    pub element_type: Option<Type>,
+}
+
+#[derive(Debug)]
 pub enum CheckedLiteral {
     String(String, Type),
     Int(i32, Type),
     Bool(bool, Type),
     Struct(CheckedStructLiteral, Struct, Type),
+    Array(CheckedArrayLiteral, Type),
 }
 
 #[derive(Debug)]
@@ -497,6 +532,7 @@ impl CheckedExpression {
                 CheckedLiteral::Int(_, ttype) => ttype,
                 CheckedLiteral::Bool(_, ttype) => ttype,
                 CheckedLiteral::Struct(_, _, ttype) => ttype,
+                CheckedLiteral::Array(_, ttype) => ttype,
             }
             .clone(),
             Self::FunctionCall(func_call) => func_call.ttype.clone(),
@@ -1048,6 +1084,57 @@ fn typecheck_expression(
                         },
                         r#struct,
                         Type::UserDefined(struct_literal.name.clone()),
+                    )),
+                    errors,
+                )
+            }
+            Literal::Array(array_literal, _) => {
+                let mut errors = vec![];
+
+                let mut checked_elements = Vec::with_capacity(array_literal.elements.len());
+
+                let array_elem_type = if let Some(first_elem) = array_literal.elements.get(0) {
+                    let (checked_elem, mut errs) = typecheck_expression(context, first_elem);
+                    errors.append(&mut errs);
+
+                    let array_elem_type = checked_elem.ttype();
+                    checked_elements.push(checked_elem);
+                    Some(array_elem_type)
+                } else {
+                    None
+                };
+
+                checked_elements.extend(array_literal.elements.iter().skip(1).map(|elem| {
+                    let (checked_elem, mut errs) = typecheck_expression(context, elem);
+                    errors.append(&mut errs);
+
+                    if !checked_elem
+                        .ttype()
+                        .matches(array_elem_type.as_ref().unwrap())
+                    {
+                        errors.push(TypeCheckError::WrongElementTypeInArray(
+                            checked_elem.ttype(),
+                            array_elem_type.clone().unwrap(),
+                            elem.span(),
+                        ));
+                    }
+
+                    checked_elem
+                }));
+
+                let array_type = if let Some(array_elem_type) = &array_elem_type {
+                    Type::Array(Box::new(array_elem_type.clone()), checked_elements.len())
+                } else {
+                    Type::GenericEmptyArray
+                };
+
+                (
+                    CheckedExpression::Literal(CheckedLiteral::Array(
+                        CheckedArrayLiteral {
+                            elements: checked_elements,
+                            element_type: array_elem_type,
+                        },
+                        array_type,
                     )),
                     errors,
                 )

@@ -78,11 +78,17 @@ pub struct ParsedStructLiteral {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedArrayLiteral {
+    pub elements: Vec<ParsedExpression>,
+}
+
+#[derive(Debug, Clone)]
 pub enum Literal {
     String(String, Span),
     Int(i32, Span),
     Bool(bool, Span),
     Struct(ParsedStructLiteral, Span),
+    Array(ParsedArrayLiteral, Span),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,6 +136,7 @@ impl Spanned for ParsedExpression {
                 Literal::Int(_, span) => *span,
                 Literal::Bool(_, span) => *span,
                 Literal::Struct(_, span) => *span,
+                Literal::Array(_, span) => *span,
             },
             Self::FunctionCall(f) => f.span,
             Self::Variable(_, span) => *span,
@@ -799,6 +806,16 @@ fn parse_expression(
                     errors,
                 )
             }
+            Token {
+                kind: TokenKind::OBracket,
+                ..
+            } => {
+                let (array, span, errors) = parse_array_literal(tokens, idx)?;
+                (
+                    ParsedExpression::Literal(Literal::Array(array, span)),
+                    errors,
+                )
+            }
             tok => {
                 errors.push(ParseError::UnexpectedToken(tok.span()));
                 *idx += 1;
@@ -885,6 +902,52 @@ fn parse_expression(
     };
 
     Some((expr, errors))
+}
+
+fn parse_array_literal(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(ParsedArrayLiteral, Span, Vec<ParseError>)> {
+    let mut errors = vec![];
+
+    expect!(&mut errors, tokens, idx, TokenKind::OBracket);
+    let o_brace_span = tokens[*idx - 1].span();
+
+    let mut elements = vec![];
+    while *idx < tokens.len()
+        && !matches!(
+            tokens.get(*idx)?,
+            &Token {
+                kind: TokenKind::CBracket,
+                ..
+            }
+        )
+    {
+        let (arg, mut errs) = parse_expression(tokens, idx)?;
+        elements.push(arg);
+        errors.append(&mut errs);
+
+        if matches!(
+            &tokens.get(*idx)?,
+            &Token {
+                kind: TokenKind::Comma,
+                ..
+            }
+        ) {
+            *idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    expect!(&mut errors, tokens, idx, TokenKind::CBracket);
+    let c_brace_span = tokens[*idx - 1].span();
+
+    Some((
+        ParsedArrayLiteral { elements },
+        o_brace_span.to(c_brace_span),
+        errors,
+    ))
 }
 
 fn parse_struct_literal(

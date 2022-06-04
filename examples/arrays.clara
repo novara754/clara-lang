@@ -1,12 +1,4 @@
 fn main() {
   let xs = [1, 2, 3, 4];
-  let ys = [0; 4];
-
-  for i, x in xs {
-    ys[i] = x;
-  }
-
-  for y in ys {
-
-  }
+  let ys = [0, 0, 0, 0];
 }
