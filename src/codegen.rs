@@ -10,7 +10,7 @@ use llvm::{
 use llvm_sys as llvm;
 
 use crate::{
-    parser::BinaryOperation,
+    parser::{CompareOperation, MathOperation},
     typechecker::{
         CheckedBlock, CheckedExpression, CheckedLiteral, CheckedProgram, CheckedStatement, Type,
     },
@@ -133,8 +133,6 @@ pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre:
 }
 
 unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre::Result<()> {
-    let void = llvm::core::LLVMVoidTypeInContext(ctx.context);
-
     for struc in &program.structs {
         let mut fields: Vec<_> = struc
             .fields
@@ -186,7 +184,18 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
     }
 
     for func in &program.functions {
-        let function_type = llvm::core::LLVMFunctionType(void, std::ptr::null_mut(), 0, 0);
+        let mut params: Vec<_> = func
+            .parameters
+            .iter()
+            .map(|param| type_to_llvm(ctx, &param.ttype))
+            .collect();
+        let return_type = type_to_llvm(ctx, &func.return_type);
+        let function_type = llvm::core::LLVMFunctionType(
+            return_type,
+            params.as_mut_ptr(),
+            params.len().try_into()?,
+            0,
+        );
         let function = llvm::core::LLVMAddFunction(
             ctx.module,
             CString::new(func.name.as_str())?.as_ptr(),
@@ -197,6 +206,7 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
         ctx.known_functions
             .insert(func.name.clone(), (function, function_type));
 
+        ctx.scope_stack.push_scope();
         ctx.current_function = Some(function);
 
         let bb = llvm::core::LLVMAppendBasicBlockInContext(
@@ -204,10 +214,30 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
             ctx.current_function.unwrap(),
             b"\0".as_ptr() as *const _,
         );
+        llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, bb);
+
+        for (param_idx, param) in func.parameters.iter().enumerate() {
+            let param_type_ref = type_to_llvm(ctx, &param.ttype);
+            let param_storage = llvm::core::LLVMBuildAlloca(
+                ctx.builder,
+                param_type_ref,
+                b"\0".as_ptr() as *const _,
+            );
+            llvm::core::LLVMBuildStore(
+                ctx.builder,
+                llvm::core::LLVMGetParam(function, param_idx.try_into()?),
+                param_storage,
+            );
+            ctx.scope_stack
+                .add_variable(param.name.clone(), param_storage);
+        }
+
         emit_block(ctx, &func.body, bb)?;
 
         llvm::core::LLVMBuildRetVoid(ctx.builder);
+
         ctx.current_function.take();
+        ctx.scope_stack.pop_scope();
     }
 
     Ok(())
@@ -299,6 +329,17 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
 
             llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, after_loop_block);
         }
+        CheckedStatement::Return(return_value) => {
+            let return_value = emit_expression(ctx, return_value)?;
+            llvm::core::LLVMBuildRet(ctx.builder, return_value);
+
+            let unreachable_block = llvm::core::LLVMAppendBasicBlockInContext(
+                ctx.context,
+                ctx.current_function.unwrap(),
+                b"unreachable_block\0".as_ptr() as *const _,
+            );
+            llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, unreachable_block);
+        }
     }
 
     Ok(())
@@ -385,15 +426,15 @@ unsafe fn emit_expression(
                 b"function_call\0".as_ptr() as *const _,
             )
         }
-        CheckedExpression::BinaryOp(lhs, rhs, op, _type) => {
+        CheckedExpression::CompareOp(lhs, rhs, op, _type) => {
             let lhs = emit_expression(ctx, lhs)?;
             let rhs = emit_expression(ctx, rhs)?;
             let predicate = match op {
-                BinaryOperation::GreaterThan => LLVMIntPredicate::LLVMIntSGT,
-                BinaryOperation::Equality => LLVMIntPredicate::LLVMIntEQ,
-                BinaryOperation::GreaterThanEqual => LLVMIntPredicate::LLVMIntSGE,
-                BinaryOperation::LessThan => LLVMIntPredicate::LLVMIntSLT,
-                BinaryOperation::LessThanEqual => LLVMIntPredicate::LLVMIntSLE,
+                CompareOperation::GreaterThan => LLVMIntPredicate::LLVMIntSGT,
+                CompareOperation::Equality => LLVMIntPredicate::LLVMIntEQ,
+                CompareOperation::GreaterThanEqual => LLVMIntPredicate::LLVMIntSGE,
+                CompareOperation::LessThan => LLVMIntPredicate::LLVMIntSLT,
+                CompareOperation::LessThanEqual => LLVMIntPredicate::LLVMIntSLE,
             };
             llvm::core::LLVMBuildICmp(
                 ctx.builder,
@@ -402,6 +443,20 @@ unsafe fn emit_expression(
                 rhs,
                 b"bin_op\0".as_ptr() as *const _,
             )
+        }
+        CheckedExpression::MathOp(lhs, rhs, op, ttype) => {
+            assert!(
+                ttype.is_integer_type(),
+                "Codegen for MathOp for non-ints not implemented"
+            );
+
+            let lhs = emit_expression(ctx, lhs)?;
+            let rhs = emit_expression(ctx, rhs)?;
+            match op {
+                MathOperation::Addition => {
+                    llvm::core::LLVMBuildAdd(ctx.builder, lhs, rhs, b"\0".as_ptr() as *const _)
+                }
+            }
         }
         CheckedExpression::Variable(variable_name, _type) => llvm::core::LLVMBuildLoad(
             ctx.builder,

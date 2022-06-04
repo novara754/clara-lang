@@ -21,6 +21,7 @@ pub enum TokenKind {
     While,
     If,
     Else,
+    Return,
     OParen,
     CParen,
     OBrace,
@@ -35,6 +36,7 @@ pub enum TokenKind {
     LessThan,
     GreaterThanEqual,
     LessThanEqual,
+    Plus,
     Dot,
     Unknown,
 }
@@ -55,6 +57,7 @@ impl TokenKind {
             While => "`while` keyword",
             If => "`if` keyword",
             Else => "`else` keyword",
+            Return => "`return` keyword",
             OParen => "`(`",
             CParen => "`)`",
             OBrace => "`{`",
@@ -69,6 +72,7 @@ impl TokenKind {
             GreaterThanEqual => "`>=`",
             LessThan => "`<`",
             LessThanEqual => "`<=`",
+            Plus => "`+`",
             Dot => "`.`",
             Unknown => "unknown token",
         }
@@ -189,6 +193,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 "else" => TokenKind::Else,
                 "true" => TokenKind::True,
                 "false" => TokenKind::False,
+                "return" => TokenKind::Return,
                 _ => TokenKind::Ident(name.to_owned()),
             };
             tokens.push(Token::new(kind, start, len));
@@ -271,6 +276,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             b';' => tokens.push(Token::new(TokenKind::SemiColon, idx, 1)),
             b',' => tokens.push(Token::new(TokenKind::Comma, idx, 1)),
             b':' => tokens.push(Token::new(TokenKind::Colon, idx, 1)),
+            b'+' => tokens.push(Token::new(TokenKind::Plus, idx, 1)),
             b'=' => {
                 let token = match source.get(idx + 1) {
                     Some(b'=') => {

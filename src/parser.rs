@@ -86,7 +86,7 @@ pub enum Literal {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum BinaryOperation {
+pub enum CompareOperation {
     Equality,
     GreaterThan,
     GreaterThanEqual,
@@ -94,16 +94,9 @@ pub enum BinaryOperation {
     LessThanEqual,
 }
 
-impl BinaryOperation {
-    pub fn to_c(self) -> &'static str {
-        match self {
-            Self::Equality => "==",
-            Self::GreaterThan => ">",
-            Self::GreaterThanEqual => ">=",
-            Self::LessThan => "<",
-            Self::LessThanEqual => "<=",
-        }
-    }
+#[derive(Debug, Clone, Copy)]
+pub enum MathOperation {
+    Addition,
 }
 
 #[derive(Debug, Clone)]
@@ -120,11 +113,12 @@ pub enum ParsedExpression {
     Literal(Literal),
     FunctionCall(ParsedFunctionCall),
     Variable(String, Span),
-    BinaryOp(
+    CompareOp(
         Box<ParsedExpression>,
         Box<ParsedExpression>,
-        BinaryOperation,
+        CompareOperation,
     ),
+    MathOp(Box<ParsedExpression>, Box<ParsedExpression>, MathOperation),
     FieldAccess(ParsedFieldAccess),
 }
 
@@ -139,7 +133,8 @@ impl Spanned for ParsedExpression {
             },
             Self::FunctionCall(f) => f.span,
             Self::Variable(_, span) => *span,
-            Self::BinaryOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
+            Self::CompareOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
+            Self::MathOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
             ParsedExpression::FieldAccess(field_access) => field_access.span,
         }
     }
@@ -164,6 +159,7 @@ pub enum ParsedStatement {
     LetAssign(String, ParsedExpression, Span),
     WhileLoop(ParsedWhileLoop),
     IfElse(ParsedIfElse),
+    Return(ParsedExpression),
 }
 
 #[derive(Debug)]
@@ -176,6 +172,8 @@ pub struct ParsedFunction {
     pub name: String,
     pub parameters: Vec<FunctionParameter>,
     pub body: ParsedBlock,
+    pub return_type: Type,
+    pub return_type_span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -445,6 +443,73 @@ fn parse_extern_function(
     Some((fun, errors))
 }
 
+fn parse_function(tokens: &[Token], idx: &mut usize) -> Option<(ParsedFunction, Vec<ParseError>)> {
+    let mut errors = vec![];
+
+    expect!(&mut errors, tokens, idx, TokenKind::Fn);
+
+    let (name, _name_span, mut errs) = parse_name(tokens, idx)?;
+    errors.append(&mut errs);
+
+    expect!(&mut errors, tokens, idx, TokenKind::OParen);
+
+    let mut parameters = vec![];
+    while *idx < tokens.len()
+        && !matches!(
+            tokens.get(*idx)?,
+            &Token {
+                kind: TokenKind::CParen,
+                ..
+            }
+        )
+    {
+        let (param, mut errs) = parse_parameter(tokens, idx)?;
+        parameters.push(param);
+        errors.append(&mut errs);
+
+        if matches!(
+            tokens.get(*idx)?,
+            &Token {
+                kind: TokenKind::Comma,
+                ..
+            }
+        ) {
+            *idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    expect!(&mut errors, tokens, idx, TokenKind::CParen);
+
+    let (return_type, return_type_span) = if let Some(Token {
+        kind: TokenKind::Colon,
+        ..
+    }) = tokens.get(*idx)
+    {
+        expect!(&mut errors, tokens, idx, TokenKind::Colon);
+        let (return_type, return_type_span, mut errs) = parse_type(tokens, idx)?;
+        errors.append(&mut errs);
+
+        (return_type, return_type_span)
+    } else {
+        (Type::Unit, Span::new(0, 0))
+    };
+
+    let (body, mut errs) = parse_block(tokens, idx)?;
+    errors.append(&mut errs);
+
+    let fun = ParsedFunction {
+        name,
+        body,
+        parameters,
+        return_type,
+        return_type_span,
+    };
+
+    Some((fun, errors))
+}
+
 fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Span, Vec<ParseError>)> {
     let mut errors = vec![];
 
@@ -512,57 +577,6 @@ fn parse_parameter(
         },
         errors,
     ))
-}
-
-fn parse_function(tokens: &[Token], idx: &mut usize) -> Option<(ParsedFunction, Vec<ParseError>)> {
-    let mut errors = vec![];
-
-    expect!(&mut errors, tokens, idx, TokenKind::Fn);
-
-    let (name, _name_span, mut errs) = parse_name(tokens, idx)?;
-    errors.append(&mut errs);
-
-    expect!(&mut errors, tokens, idx, TokenKind::OParen);
-
-    let mut parameters = vec![];
-    while *idx < tokens.len()
-        && !matches!(
-            tokens.get(*idx)?,
-            &Token {
-                kind: TokenKind::CParen,
-                ..
-            }
-        )
-    {
-        let (param, mut errs) = parse_parameter(tokens, idx)?;
-        parameters.push(param);
-        errors.append(&mut errs);
-
-        if matches!(
-            tokens.get(*idx)?,
-            &Token {
-                kind: TokenKind::Comma,
-                ..
-            }
-        ) {
-            *idx += 1;
-        } else {
-            break;
-        }
-    }
-
-    expect!(&mut errors, tokens, idx, TokenKind::CParen);
-
-    let (body, mut errs) = parse_block(tokens, idx)?;
-    errors.append(&mut errs);
-
-    let fun = ParsedFunction {
-        name,
-        body,
-        parameters,
-    };
-
-    Some((fun, errors))
 }
 
 fn parse_block(tokens: &[Token], idx: &mut usize) -> Option<(ParsedBlock, Vec<ParseError>)> {
@@ -637,6 +651,14 @@ fn parse_statement(
         } => {
             let (if_else, errors) = parse_if_else(tokens, idx)?;
             (ParsedStatement::IfElse(if_else), errors, false)
+        }
+        Token {
+            kind: TokenKind::Return,
+            ..
+        } => {
+            *idx += 1; // Consume `return` token
+            let (return_value, errors) = parse_expression(tokens, idx)?;
+            (ParsedStatement::Return(return_value), errors, true)
         }
         _ => {
             let (expr, errors) = parse_expression(tokens, idx)?;
@@ -810,6 +832,28 @@ fn parse_expression(
 
     let expr = if let Some(
         tok @ Token {
+            kind: TokenKind::Plus,
+            ..
+        },
+    ) = tokens.get(*idx)
+    {
+        *idx += 1; // Consume oeprator token
+
+        let op = match tok.kind {
+            TokenKind::Plus => MathOperation::Addition,
+            _ => unreachable!(),
+        };
+
+        let (rhs, mut errs) = parse_expression(tokens, idx)?;
+        errors.append(&mut errs);
+
+        ParsedExpression::MathOp(Box::new(expr), Box::new(rhs), op)
+    } else {
+        expr
+    };
+
+    let expr = if let Some(
+        tok @ Token {
             kind:
                 TokenKind::EqualEqual
                 | TokenKind::GreaterThan
@@ -823,18 +867,18 @@ fn parse_expression(
         *idx += 1; // Consume oeprator token
 
         let op = match tok.kind {
-            TokenKind::EqualEqual => BinaryOperation::Equality,
-            TokenKind::GreaterThan => BinaryOperation::GreaterThan,
-            TokenKind::GreaterThanEqual => BinaryOperation::GreaterThanEqual,
-            TokenKind::LessThan => BinaryOperation::LessThan,
-            TokenKind::LessThanEqual => BinaryOperation::LessThanEqual,
+            TokenKind::EqualEqual => CompareOperation::Equality,
+            TokenKind::GreaterThan => CompareOperation::GreaterThan,
+            TokenKind::GreaterThanEqual => CompareOperation::GreaterThanEqual,
+            TokenKind::LessThan => CompareOperation::LessThan,
+            TokenKind::LessThanEqual => CompareOperation::LessThanEqual,
             _ => unreachable!(),
         };
 
         let (rhs, mut errs) = parse_expression(tokens, idx)?;
         errors.append(&mut errs);
 
-        ParsedExpression::BinaryOp(Box::new(expr), Box::new(rhs), op)
+        ParsedExpression::CompareOp(Box::new(expr), Box::new(rhs), op)
     } else {
         expr
     };

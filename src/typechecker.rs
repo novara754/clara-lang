@@ -6,8 +6,8 @@ use serde_json::json;
 use crate::{
     error::{JsonError, ReportError},
     parser::{
-        BinaryOperation, FunctionParameter, Literal, ParsedBlock, ParsedExpression, ParsedProgram,
-        ParsedStatement, ParsedStruct,
+        CompareOperation, FunctionParameter, Literal, MathOperation, ParsedBlock, ParsedExpression,
+        ParsedFunction, ParsedProgram, ParsedStatement, ParsedStruct,
     },
     span::{Span, Spanned},
 };
@@ -104,6 +104,7 @@ pub enum TypeCheckError {
     StructFieldWrongType(String, String, Type, Type, Span),
     StructMissingField(String, String, Span),
     StructSuperfluousField(String, String, Span),
+    InvalidReturnType(Type, Type, Span),
 }
 
 impl ReportError for TypeCheckError {
@@ -270,6 +271,19 @@ impl ReportError for TypeCheckError {
                             .with_color(Color::Red),
                     )
             }
+            Self::InvalidReturnType(ref actual, ref expected, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("type of return value does not match expected return type")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "expression has type `{}` but function expected type `{}`",
+                                actual.to_str(),
+                                expected.to_str(),
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
         }
         .finish()
     }
@@ -386,6 +400,15 @@ impl JsonError for TypeCheckError {
                     ),
                 "span": span.json(),
             }),
+            Self::InvalidReturnType(ref actual, ref expected, span) => json!({
+                "message":
+                    format!(
+                        "return value has type `{}` but function expected type `{}`",
+                        actual.to_str(),
+                        expected.to_str(),
+                    ),
+                "span": span.json(),
+            }),
         }
     }
 }
@@ -422,10 +445,16 @@ pub enum CheckedExpression {
     Literal(CheckedLiteral),
     FunctionCall(CheckedFunctionCall),
     Variable(String, Type),
-    BinaryOp(
+    CompareOp(
         Box<CheckedExpression>,
         Box<CheckedExpression>,
-        BinaryOperation,
+        CompareOperation,
+        Type,
+    ),
+    MathOp(
+        Box<CheckedExpression>,
+        Box<CheckedExpression>,
+        MathOperation,
         Type,
     ),
     FieldAccess(CheckedFieldAccess, Struct, Type),
@@ -443,7 +472,8 @@ impl CheckedExpression {
             .clone(),
             Self::FunctionCall(func_call) => func_call.ttype.clone(),
             Self::Variable(_name, ttype) => ttype.clone(),
-            Self::BinaryOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
+            Self::CompareOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
+            Self::MathOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
             Self::FieldAccess(_field_access, _struct, ttype) => ttype.clone(),
         }
     }
@@ -468,6 +498,7 @@ pub enum CheckedStatement {
     LetAssign(String, CheckedExpression),
     WhileLoop(CheckedWhileLoop),
     IfElse(CheckedIfElse),
+    Return(CheckedExpression),
 }
 
 #[derive(Debug)]
@@ -479,6 +510,8 @@ pub struct CheckedBlock {
 pub struct CheckedFunction {
     pub name: String,
     pub body: CheckedBlock,
+    pub parameters: Vec<FunctionParameter>,
+    pub return_type: Type,
 }
 
 #[derive(Debug)]
@@ -556,13 +589,14 @@ impl ScopeStack {
 }
 
 #[derive(Debug)]
-struct Context {
+struct Context<'a> {
     known_structs: HashMap<String, Struct>,
     known_functions: HashMap<String, Function>,
     scope_stack: ScopeStack,
+    current_function: Option<&'a ParsedFunction>,
 }
 
-impl Context {
+impl<'a> Context<'a> {
     fn type_is_defined(&self, ttype: &Type) -> bool {
         match ttype {
             Type::Pointer(ref subtype) => self.type_is_defined(subtype),
@@ -579,6 +613,7 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
         known_structs: HashMap::new(),
         known_functions: HashMap::new(),
         scope_stack: ScopeStack::default(),
+        current_function: None,
     };
 
     for func in &program.extern_functions {
@@ -597,7 +632,7 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
             name,
             Function {
                 parameters: func.parameters.clone(),
-                return_type: Type::Unit,
+                return_type: func.return_type.clone(),
             },
         );
     }
@@ -654,15 +689,41 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
         .functions
         .iter()
         .map(|func| {
+            for param in &func.parameters {
+                if !context.type_is_defined(&param.ttype) {
+                    errors.push(TypeCheckError::UnknownType(
+                        param.ttype.to_str(),
+                        param.type_span,
+                    ));
+                }
+            }
+
+            if !context.type_is_defined(&func.return_type) {
+                errors.push(TypeCheckError::UnknownType(
+                    func.return_type.to_str(),
+                    func.return_type_span,
+                ));
+            }
+
             context.scope_stack.push_scope(func.name.clone());
+            context.current_function = Some(func);
+
+            for param in &func.parameters {
+                context
+                    .scope_stack
+                    .add_variable(&param.name, param.ttype.clone());
+            }
 
             let (body, mut errs) = typecheck_block(&mut context, &func.body);
             errors.append(&mut errs);
 
+            context.current_function.take();
             context.scope_stack.pop_scope();
 
             CheckedFunction {
                 name: func.name.clone(),
+                parameters: func.parameters.clone(),
+                return_type: func.return_type.clone(),
                 body,
             }
         })
@@ -771,6 +832,20 @@ fn typecheck_statement(
                 }),
                 errors,
             )
+        }
+        ParsedStatement::Return(return_value) => {
+            let (checked_return_value, mut errors) = typecheck_expression(context, return_value);
+
+            let function_return_type = &context.current_function.unwrap().return_type;
+            if !function_return_type.matches(&checked_return_value.ttype()) {
+                errors.push(TypeCheckError::InvalidReturnType(
+                    checked_return_value.ttype(),
+                    function_return_type.clone(),
+                    return_value.span(),
+                ));
+            }
+
+            (CheckedStatement::Return(checked_return_value), errors)
         }
     }
 }
@@ -946,7 +1021,7 @@ fn typecheck_expression(
                 )
             }
         }
-        ParsedExpression::BinaryOp(lhs, rhs, op) => {
+        ParsedExpression::CompareOp(lhs, rhs, op) => {
             let (checked_lhs, mut errors) = typecheck_expression(context, lhs);
             let (checked_rhs, mut errs) = typecheck_expression(context, rhs);
             errors.append(&mut errs);
@@ -961,20 +1036,40 @@ fn typecheck_expression(
             }
 
             let ttype = match op {
-                BinaryOperation::Equality => Type::Bool,
-                BinaryOperation::GreaterThan => Type::Bool,
-                BinaryOperation::GreaterThanEqual => Type::Bool,
-                BinaryOperation::LessThan => Type::Bool,
-                BinaryOperation::LessThanEqual => Type::Bool,
+                CompareOperation::Equality => Type::Bool,
+                CompareOperation::GreaterThan => Type::Bool,
+                CompareOperation::GreaterThanEqual => Type::Bool,
+                CompareOperation::LessThan => Type::Bool,
+                CompareOperation::LessThanEqual => Type::Bool,
             };
 
             (
-                CheckedExpression::BinaryOp(
+                CheckedExpression::CompareOp(
                     Box::new(checked_lhs),
                     Box::new(checked_rhs),
                     *op,
                     ttype,
                 ),
+                errors,
+            )
+        }
+        ParsedExpression::MathOp(lhs, rhs, op) => {
+            let (checked_lhs, mut errors) = typecheck_expression(context, lhs);
+            let (checked_rhs, mut errs) = typecheck_expression(context, rhs);
+            errors.append(&mut errs);
+
+            if !checked_lhs.ttype().matches(&checked_rhs.ttype()) {
+                errors.push(TypeCheckError::BinaryOpMismatch(
+                    checked_lhs.ttype(),
+                    checked_rhs.ttype(),
+                    lhs.span(),
+                    rhs.span(),
+                ))
+            }
+
+            let ttype = checked_lhs.ttype();
+            (
+                CheckedExpression::MathOp(Box::new(checked_lhs), Box::new(checked_rhs), *op, ttype),
                 errors,
             )
         }

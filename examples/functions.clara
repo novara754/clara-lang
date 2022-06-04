@@ -1,0 +1,13 @@
+extern fn puts(s: ->c_char);
+
+fn add(x: int, y: int): int {
+  return x + y;
+}
+
+fn main() {
+  if add(5, 2) == 7 {
+    puts("yes, 5 + 2 = 7");
+  } else {
+    puts("something is terribly wrong");
+  }
+}
