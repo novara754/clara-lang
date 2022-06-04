@@ -865,6 +865,8 @@ fn parse_struct_literal(
         let (field_name, field_name_span, mut errs) = parse_name(tokens, idx)?;
         errors.append(&mut errs);
 
+        expect!(&mut errors, tokens, idx, TokenKind::Colon);
+
         let (field_value, mut errs) = parse_expression(tokens, idx)?;
         errors.append(&mut errs);
 
