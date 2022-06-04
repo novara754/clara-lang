@@ -69,25 +69,6 @@ impl Type {
             Self::UserDefined(name) => name.clone(),
         }
     }
-
-    pub fn to_c(&self) -> String {
-        match self {
-            // TODO: Maybe handle this case better?
-            Self::GenericInt => {
-                // panic!("attempted to instantiate generic integer type in c codegen")
-                Self::Int.to_c()
-            }
-            Self::Pointer(ty) => format!("{}*", ty.to_str()),
-            Self::String => "string".to_string(),
-            Self::Int => "int".to_string(),
-            Self::Bool => "bool".to_string(),
-            Self::Unit => "unit".to_string(),
-            Self::CChar => "c_char".to_string(),
-            Self::CInt => "c_int".to_string(),
-            Self::Incomplete => "incomplete type".to_string(),
-            Self::UserDefined(name) => name.clone(),
-        }
-    }
 }
 
 pub enum TypeCheckError {
