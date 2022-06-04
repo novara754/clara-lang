@@ -170,6 +170,13 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             break;
         }
 
+        if source[idx] == b'/' && source.get(idx) == Some(&b'/') {
+            while idx < source.len() && source[idx] != b'\n' {
+                idx += 1;
+            }
+            continue;
+        }
+
         // Identifiers & keywords
         if source[idx].is_ascii_alphabetic() {
             let start = idx;
