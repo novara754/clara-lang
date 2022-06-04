@@ -16,7 +16,7 @@ The compiler will generate an object file and place it in the `./build` director
 Afterwards in can be linked (such as with GCC) to produce an executable:
 
 ```
-$ gcc -no-pie ./build/the_object.o
+$ gcc -no-pie ./build/the_object.o ./lib/clara.c
 $ ./a.out
 ```
 

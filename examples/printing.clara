@@ -1,0 +1,7 @@
+extern fn print_int(n: c_int);
+extern fn print_str(s: ->c_char);
+
+fn main() {
+  print_int(123);
+  print_str("hello, world!");
+}
