@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 
 use ariadne::{Color, Label, Report, ReportKind};
 use serde_json::json;
@@ -105,6 +105,9 @@ pub enum TypeCheckError {
     StructMissingField(String, String, Span),
     StructSuperfluousField(String, String, Span),
     InvalidReturnType(Type, Type, Span),
+    DuplicateParameterName(String, Span),
+    DuplicateVariableName(String, Span),
+    DuplicateFuncStructName(String, Span),
 }
 
 impl ReportError for TypeCheckError {
@@ -284,6 +287,39 @@ impl ReportError for TypeCheckError {
                             .with_color(Color::Red),
                     )
             }
+            Self::DuplicateParameterName(ref name, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("duplicate parameter name in function")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "parameter name `{name}` has already been used in this function"
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
+            Self::DuplicateVariableName(ref name, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("duplicate variable name in function")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "variable name `{name}` has already been used in this function"
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
+            Self::DuplicateFuncStructName(ref name, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("duplicate function or struct name")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "function or struct name `{name}` has already been used"
+                            ))
+                            .with_color(Color::Red),
+                    )
+            }
         }
         .finish()
     }
@@ -407,6 +443,18 @@ impl JsonError for TypeCheckError {
                         actual.to_str(),
                         expected.to_str(),
                     ),
+                "span": span.json(),
+            }),
+            Self::DuplicateParameterName(ref name, span) => json!({
+                "message": format!("parameter name `{name}` used more than once"),
+                "span": span.json(),
+            }),
+            Self::DuplicateVariableName(ref name, span) => json!({
+                "message": format!("variable name `{name}` used more than once in this function"),
+                "span": span.json(),
+            }),
+            Self::DuplicateFuncStructName(ref name, span) => json!({
+                "message": format!("function or struct name `{name}` used more than once"),
                 "span": span.json(),
             }),
         }
@@ -566,12 +614,21 @@ impl ScopeStack {
         self.stack.pop();
     }
 
-    fn add_variable(&mut self, variable_name: &str, ttype: Type) {
-        self.stack
+    fn add_variable(&mut self, variable_name: &str, ttype: Type) -> bool {
+        let entry = self
+            .stack
             .last_mut()
             .unwrap()
             .1
-            .insert(variable_name.to_string(), ttype);
+            .entry(variable_name.to_string());
+
+        match entry {
+            Entry::Occupied(_) => true,
+            _ => {
+                entry.or_insert(ttype);
+                false
+            }
+        }
     }
 
     fn get_variable_type(&self, variable_name: &str) -> Option<&Type> {
@@ -618,6 +675,15 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
 
     for func in &program.extern_functions {
         let name = func.name.clone();
+
+        if context.known_functions.contains_key(&name) {
+            errors.push(TypeCheckError::DuplicateFuncStructName(
+                name.clone(),
+                func.name_span,
+            ));
+            continue;
+        }
+
         context.known_functions.insert(
             name,
             Function {
@@ -628,6 +694,15 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
     }
     for func in &program.functions {
         let name = func.name.clone();
+
+        if context.known_functions.contains_key(&name) {
+            errors.push(TypeCheckError::DuplicateFuncStructName(
+                name.clone(),
+                func.name_span,
+            ));
+            continue;
+        }
+
         context.known_functions.insert(
             name,
             Function {
@@ -638,22 +713,42 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
     }
     for r#struct in &program.structs {
         match r#struct {
-            ParsedStruct::Opaque(name) => context.known_structs.insert(
-                name.clone(),
-                Struct {
-                    name: name.clone(),
-                    fields: vec![],
-                    is_opaque: true,
-                },
-            ),
-            ParsedStruct::Transparent(name, fields) => context.known_structs.insert(
-                name.clone(),
-                Struct {
-                    name: name.clone(),
-                    fields: fields.clone(),
-                    is_opaque: false,
-                },
-            ),
+            ParsedStruct::Opaque(name, name_span) => {
+                if context.known_functions.contains_key(name) {
+                    errors.push(TypeCheckError::DuplicateFuncStructName(
+                        name.clone(),
+                        *name_span,
+                    ));
+                    continue;
+                }
+
+                context.known_structs.insert(
+                    name.clone(),
+                    Struct {
+                        name: name.clone(),
+                        fields: vec![],
+                        is_opaque: true,
+                    },
+                );
+            }
+            ParsedStruct::Transparent(name, name_span, fields) => {
+                if context.known_functions.contains_key(name) {
+                    errors.push(TypeCheckError::DuplicateFuncStructName(
+                        name.clone(),
+                        *name_span,
+                    ));
+                    continue;
+                }
+
+                context.known_structs.insert(
+                    name.clone(),
+                    Struct {
+                        name: name.clone(),
+                        fields: fields.clone(),
+                        is_opaque: false,
+                    },
+                );
+            }
         };
     }
 
@@ -661,6 +756,8 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
         .extern_functions
         .iter()
         .map(|func| {
+            let mut seen_param_names: Vec<&str> = vec![];
+
             for param in &func.parameters {
                 if !context.type_is_defined(&param.ttype) {
                     errors.push(TypeCheckError::UnknownType(
@@ -668,6 +765,15 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
                         param.type_span,
                     ));
                 }
+
+                if seen_param_names.contains(&param.name.as_str()) {
+                    errors.push(TypeCheckError::DuplicateParameterName(
+                        param.name.clone(),
+                        param.name_span,
+                    ));
+                }
+
+                seen_param_names.push(&param.name);
             }
 
             if !context.type_is_defined(&func.return_type) {
@@ -689,6 +795,8 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
         .functions
         .iter()
         .map(|func| {
+            let mut seen_param_names: Vec<&str> = vec![];
+
             for param in &func.parameters {
                 if !context.type_is_defined(&param.ttype) {
                     errors.push(TypeCheckError::UnknownType(
@@ -696,6 +804,15 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
                         param.type_span,
                     ));
                 }
+
+                if seen_param_names.contains(&param.name.as_str()) {
+                    errors.push(TypeCheckError::DuplicateParameterName(
+                        param.name.clone(),
+                        param.name_span,
+                    ));
+                }
+
+                seen_param_names.push(&param.name);
             }
 
             if !context.type_is_defined(&func.return_type) {
@@ -767,11 +884,19 @@ fn typecheck_statement(
             let (checked_expr, errors) = typecheck_expression(context, expr);
             (CheckedStatement::Expression(checked_expr), errors)
         }
-        ParsedStatement::LetAssign(name, expr, _span) => {
-            let (checked_expr, errors) = typecheck_expression(context, expr);
-            context.scope_stack.add_variable(name, checked_expr.ttype());
+        ParsedStatement::LetAssign(let_assign) => {
+            let (checked_value, mut errors) = typecheck_expression(context, &let_assign.value);
+            if context
+                .scope_stack
+                .add_variable(&let_assign.name, checked_value.ttype())
+            {
+                errors.push(TypeCheckError::DuplicateVariableName(
+                    let_assign.name.clone(),
+                    let_assign.name_span,
+                ));
+            }
             (
-                CheckedStatement::LetAssign(name.clone(), checked_expr),
+                CheckedStatement::LetAssign(let_assign.name.clone(), checked_value),
                 errors,
             )
         }
