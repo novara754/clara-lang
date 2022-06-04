@@ -141,7 +141,7 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
         let mut fields: Vec<_> = struc
             .fields
             .iter()
-            .map(|field| type_to_llvm(ctx, field.1))
+            .map(|field| type_to_llvm(ctx, &field.1))
             .collect();
         let struct_type = llvm::core::LLVMStructCreateNamed(
             ctx.context,
@@ -350,7 +350,27 @@ unsafe fn emit_expression(
 
                 str
             }
-            _ => todo!(),
+            CheckedLiteral::Struct(struct_literal, r#struct, struct_type) => {
+                let struct_type_ref = type_to_llvm(ctx, struct_type);
+
+                let mut field_values: Vec<LLVMValueRef> = r#struct
+                    .fields
+                    .iter()
+                    .map(|(declared_field_name, _)| {
+                        let field_value = struct_literal
+                            .fields
+                            .get(declared_field_name.as_str())
+                            .expect("existence of field value was established by typechecker");
+                        emit_expression(ctx, field_value)
+                    })
+                    .collect::<eyre::Result<_>>()?;
+
+                llvm::core::LLVMConstNamedStruct(
+                    struct_type_ref,
+                    field_values.as_mut_ptr(),
+                    field_values.len().try_into()?,
+                )
+            }
         },
         CheckedExpression::FunctionCall(func_call) => {
             let &(callee, callee_type) = ctx.known_functions.get(&func_call.name).unwrap();
@@ -391,7 +411,33 @@ unsafe fn emit_expression(
             ctx.scope_stack.get_variable(variable_name),
             b"\0".as_ptr() as *const _,
         ),
-        _ => todo!(),
+        CheckedExpression::FieldAccess(field_access, r#struct, _struct_type) => {
+            // let struct_type_ref = type_to_llvm(ctx, struct_type);
+            let field_index = r#struct
+                .fields
+                .iter()
+                .position(|(declared_field_name, _)| {
+                    declared_field_name == &field_access.field_name
+                })
+                .expect("existence of field in field access was established by typechecker");
+            let object = emit_expression(ctx, &field_access.object)?;
+
+            let object_type = type_to_llvm(ctx, &field_access.object.ttype());
+            let object_storage =
+                llvm::core::LLVMBuildAlloca(ctx.builder, object_type, b"\0".as_ptr() as *const _);
+
+            llvm::core::LLVMBuildStore(ctx.builder, object, object_storage);
+
+            let field_ptr = llvm::core::LLVMBuildStructGEP(
+                ctx.builder,
+                // struct_type_ref,
+                object_storage,
+                field_index.try_into()?,
+                b"\0".as_ptr() as *const _,
+            );
+
+            llvm::core::LLVMBuildLoad(ctx.builder, field_ptr, b"\0".as_ptr() as *const _)
+        }
     })
 }
 

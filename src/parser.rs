@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ariadne::{Color, Label, Report, ReportKind};
 use serde_json::json;
 
@@ -198,7 +196,7 @@ pub struct ParsedExternFunction {
 #[derive(Debug)]
 pub enum ParsedStruct {
     Opaque(String),
-    Transparent(String, HashMap<String, Type>),
+    Transparent(String, Vec<(String, Type)>),
 }
 
 #[derive(Debug)]

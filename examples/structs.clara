@@ -1,7 +1,7 @@
-extern fn print(s: string);
+extern fn puts(s: ->c_char);
 
 struct Person {
-  name: string,
+  name: ->c_char,
   age: int,
 }
 
@@ -11,5 +11,5 @@ fn main() {
     age: 27,
   };
 
-  print(bob.name);
+  puts(bob.name);
 }
