@@ -3,7 +3,7 @@
 Clara is an upcoming systems programming language.
 The compiler generates native code through an LLVM backend.
 
-See [the exampels folder](./examples/) to see the language in action.
+See [the examples folder](./examples/) to see the language in action.
 
 Use the following commands to compile an example:
 
