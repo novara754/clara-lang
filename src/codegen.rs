@@ -16,6 +16,16 @@ use crate::{
     },
 };
 
+macro_rules! c_str {
+    ($s:literal) => {
+        concat_bytes!($s, b'\0').as_ptr() as *const _
+    };
+    (mut $s:literal) => {{
+        let mut byte_str = *concat_bytes!($s, b'\0');
+        byte_str.as_mut_ptr() as *mut _
+    }};
+}
+
 struct ScopeStack {
     scopes: Vec<HashMap<String, LLVMValueRef>>,
 }
@@ -80,8 +90,8 @@ pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre:
         let target_machine = llvm::target_machine::LLVMCreateTargetMachine(
             target,
             target_triple,
-            b"generic\0".as_ptr() as *const _,
-            b"\0".as_ptr() as *const _,
+            c_str!(b"generic"),
+            c_str!(b""),
             LLVMCodeGenOptLevel::LLVMCodeGenLevelNone,
             LLVMRelocMode::LLVMRelocDefault,
             LLVMCodeModel::LLVMCodeModelDefault,
@@ -90,7 +100,7 @@ pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre:
 
         let context = llvm::core::LLVMContextCreate();
 
-        let module = llvm::core::LLVMModuleCreateWithName(b"program\0".as_ptr() as *const _);
+        let module = llvm::core::LLVMModuleCreateWithName(c_str!(b"program"));
         llvm::target::LLVMSetModuleDataLayout(module, target_data_layout);
         llvm::core::LLVMSetTarget(module, target_triple);
 
@@ -114,7 +124,7 @@ pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre:
             if llvm::target_machine::LLVMTargetMachineEmitToFile(
                 target_machine,
                 module,
-                b"./build/out.o\0".as_ptr() as *mut _,
+                c_str!(mut b"./build/out.o"),
                 LLVMCodeGenFileType::LLVMObjectFile,
                 error_message.as_mut_ptr(),
             ) != 0
@@ -213,17 +223,14 @@ unsafe fn emit_program(ctx: &mut EmitContext, program: &CheckedProgram) -> eyre:
         let bb = llvm::core::LLVMAppendBasicBlockInContext(
             ctx.context,
             ctx.current_function.unwrap(),
-            b"\0".as_ptr() as *const _,
+            c_str!(b""),
         );
         llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, bb);
 
         for (param_idx, param) in func.parameters.iter().enumerate() {
             let param_type_ref = type_to_llvm(ctx, &param.ttype)?;
-            let param_storage = llvm::core::LLVMBuildAlloca(
-                ctx.builder,
-                param_type_ref,
-                b"\0".as_ptr() as *const _,
-            );
+            let param_storage =
+                llvm::core::LLVMBuildAlloca(ctx.builder, param_type_ref, c_str!(b""));
             llvm::core::LLVMBuildStore(
                 ctx.builder,
                 llvm::core::LLVMGetParam(function, param_idx.try_into()?),
@@ -274,8 +281,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
                     .unwrap()
             );
 
-            let var =
-                llvm::core::LLVMBuildAlloca(ctx.builder, var_type, b"\0".as_ptr() as *const _);
+            let var = llvm::core::LLVMBuildAlloca(ctx.builder, var_type, c_str!(b""));
             let _ = emit_expression(ctx, value_expr, Some(var))?;
             ctx.scope_stack.add_variable(variable_name.clone(), var);
         }
@@ -283,17 +289,17 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
             let if_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"if_block\0".as_ptr() as *const _,
+                c_str!(b"if_block"),
             );
             let else_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"else_block\0".as_ptr() as *const _,
+                c_str!(b"else_block"),
             );
             let after_if_else = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"after_if_else\0".as_ptr() as *const _,
+                c_str!(b"after_if_else"),
             );
 
             let condition = emit_expression(ctx, &if_else.condition, None)?;
@@ -311,17 +317,17 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
             let condition_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"condition_block\0".as_ptr() as *const _,
+                c_str!(b"condition_block"),
             );
             let loop_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"loop_block\0".as_ptr() as *const _,
+                c_str!(b"loop_block"),
             );
             let after_loop_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"after_loop_block\0".as_ptr() as *const _,
+                c_str!(b"after_loop_block"),
             );
 
             llvm::core::LLVMBuildBr(ctx.builder, condition_block);
@@ -342,7 +348,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
             let elem_var_storage = llvm::core::LLVMBuildAlloca(
                 ctx.builder,
                 type_to_llvm(ctx, &for_in.elem_var_type)?,
-                b"elem\0".as_ptr() as *const _,
+                c_str!(b"elem"),
             );
             ctx.scope_stack
                 .add_variable(for_in.elem_var_name.clone(), elem_var_storage);
@@ -350,7 +356,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
             let index_var_storage = llvm::core::LLVMBuildAlloca(
                 ctx.builder,
                 type_to_llvm(ctx, &Type::Int)?,
-                b"idx\0".as_ptr() as *const _,
+                c_str!(b"idx"),
             );
             if let Some(index_var_name) = &for_in.index_var {
                 ctx.scope_stack
@@ -365,40 +371,37 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
             let iterable_storage = llvm::core::LLVMBuildAlloca(
                 ctx.builder,
                 type_to_llvm(ctx, &for_in.iterable.ttype())?,
-                b"iterable\0".as_ptr() as *const _,
+                c_str!(b"iterable"),
             );
             let iterable_elem_ptr = llvm::core::LLVMBuildBitCast(
                 ctx.builder,
                 iterable_storage,
                 type_to_llvm(ctx, &Type::Pointer(Box::new(for_in.elem_var_type.clone())))?,
-                b"iterable_ptr\0".as_ptr() as *const _,
+                c_str!(b"iterable_ptr"),
             );
             let _ = emit_expression(ctx, &for_in.iterable, Some(iterable_storage));
 
             let condition_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"condition_block\0".as_ptr() as *const _,
+                c_str!(b"condition_block"),
             );
             let loop_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"loop_block\0".as_ptr() as *const _,
+                c_str!(b"loop_block"),
             );
             let after_loop_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"after_loop_block\0".as_ptr() as *const _,
+                c_str!(b"after_loop_block"),
             );
 
             llvm::core::LLVMBuildBr(ctx.builder, condition_block);
 
             llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, condition_block);
-            let current_idx = llvm::core::LLVMBuildLoad(
-                ctx.builder,
-                index_var_storage,
-                b"current_idx\0".as_ptr() as *const _,
-            );
+            let current_idx =
+                llvm::core::LLVMBuildLoad(ctx.builder, index_var_storage, c_str!(b"current_idx"));
 
             let array_len = if let Type::Array(_, array_len) = for_in.iterable.ttype() {
                 llvm::core::LLVMConstInt(type_to_llvm(ctx, &Type::Int)?, array_len.try_into()?, 0)
@@ -411,7 +414,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
                 LLVMIntPredicate::LLVMIntSLT,
                 current_idx,
                 array_len,
-                b"\0".as_ptr() as *const _,
+                c_str!(b""),
             );
             llvm::core::LLVMBuildCondBr(ctx.builder, condition, loop_block, after_loop_block);
 
@@ -422,21 +425,16 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
                     iterable_elem_ptr,
                     [current_idx].as_mut_ptr(),
                     1,
-                    b"\0".as_ptr() as *const _,
+                    c_str!(b""),
                 );
-                let elem =
-                    llvm::core::LLVMBuildLoad(ctx.builder, elem_ptr, b"\0".as_ptr() as *const _);
+                let elem = llvm::core::LLVMBuildLoad(ctx.builder, elem_ptr, c_str!(b""));
                 llvm::core::LLVMBuildStore(ctx.builder, elem, elem_var_storage);
             }
             emit_block(ctx, &for_in.body, loop_block)?;
             {
                 let const_1 = llvm::core::LLVMConstInt(type_to_llvm(ctx, &Type::Int)?, 1, 0);
-                let new_idx = llvm::core::LLVMBuildAdd(
-                    ctx.builder,
-                    current_idx,
-                    const_1,
-                    b"\0".as_ptr() as *const _,
-                );
+                let new_idx =
+                    llvm::core::LLVMBuildAdd(ctx.builder, current_idx, const_1, c_str!(b""));
                 llvm::core::LLVMBuildStore(ctx.builder, new_idx, index_var_storage);
             }
             llvm::core::LLVMBuildBr(ctx.builder, condition_block);
@@ -452,7 +450,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
             let unreachable_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
                 ctx.current_function.unwrap(),
-                b"unreachable_block\0".as_ptr() as *const _,
+                c_str!(b"unreachable_block"),
             );
             llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, unreachable_block);
         }
@@ -480,11 +478,8 @@ unsafe fn emit_expression(
                 let bytes = value.as_bytes();
                 let i8 = llvm::core::LLVMInt8TypeInContext(ctx.context);
                 let str_type = llvm::core::LLVMArrayType(i8, (bytes.len() + 1).try_into()?);
-                let str = llvm::core::LLVMAddGlobal(
-                    ctx.module,
-                    str_type,
-                    b"string_literal\0".as_ptr() as *const _,
-                );
+                let str =
+                    llvm::core::LLVMAddGlobal(ctx.module, str_type, c_str!(b"string_literal"));
                 llvm::core::LLVMSetLinkage(str, LLVMLinkage::LLVMInternalLinkage);
 
                 let mut str_bytes: Vec<_> = bytes
@@ -532,7 +527,7 @@ unsafe fn emit_expression(
                     storage = Some(llvm::core::LLVMBuildAlloca(
                         ctx.builder,
                         struct_type_ref,
-                        b"\0".as_ptr() as *const _,
+                        c_str!(b""),
                     ));
                 }
 
@@ -560,7 +555,7 @@ unsafe fn emit_expression(
                     storage = Some(llvm::core::LLVMBuildAlloca(
                         ctx.builder,
                         type_to_llvm(ctx, array_type)?,
-                        b"\0".as_ptr() as *const _,
+                        c_str!(b""),
                     ));
                 }
 
@@ -580,7 +575,7 @@ unsafe fn emit_expression(
                 callee,
                 args.as_mut_ptr(),
                 args.len().try_into()?,
-                b"function_call\0".as_ptr() as *const _,
+                c_str!(b"function_call"),
             )
         }
         CheckedExpression::CompareOp(lhs, rhs, op, _type) => {
@@ -593,13 +588,7 @@ unsafe fn emit_expression(
                 CompareOperation::LessThan => LLVMIntPredicate::LLVMIntSLT,
                 CompareOperation::LessThanEqual => LLVMIntPredicate::LLVMIntSLE,
             };
-            llvm::core::LLVMBuildICmp(
-                ctx.builder,
-                predicate,
-                lhs,
-                rhs,
-                b"bin_op\0".as_ptr() as *const _,
-            )
+            llvm::core::LLVMBuildICmp(ctx.builder, predicate, lhs, rhs, c_str!(b"bin_op"))
         }
         CheckedExpression::MathOp(lhs, rhs, op, ttype) => {
             assert!(
@@ -611,14 +600,14 @@ unsafe fn emit_expression(
             let rhs = emit_expression(ctx, rhs, None)?;
             match op {
                 MathOperation::Addition => {
-                    llvm::core::LLVMBuildAdd(ctx.builder, lhs, rhs, b"\0".as_ptr() as *const _)
+                    llvm::core::LLVMBuildAdd(ctx.builder, lhs, rhs, c_str!(b""))
                 }
             }
         }
         CheckedExpression::Variable(variable_name, _type) => llvm::core::LLVMBuildLoad(
             ctx.builder,
             ctx.scope_stack.get_variable(variable_name),
-            b"\0".as_ptr() as *const _,
+            c_str!(b""),
         ),
         CheckedExpression::FieldAccess(field_access, r#struct, _struct_type) => {
             // let struct_type_ref = type_to_llvm(ctx, struct_type);
@@ -631,8 +620,7 @@ unsafe fn emit_expression(
                 .expect("existence of field in field access was established by typechecker");
 
             let object_type = type_to_llvm(ctx, &field_access.object.ttype())?;
-            let object_storage =
-                llvm::core::LLVMBuildAlloca(ctx.builder, object_type, b"\0".as_ptr() as *const _);
+            let object_storage = llvm::core::LLVMBuildAlloca(ctx.builder, object_type, c_str!(b""));
 
             let _ = emit_expression(ctx, &field_access.object, Some(object_storage))?;
 
@@ -641,10 +629,10 @@ unsafe fn emit_expression(
                 // struct_type_ref,
                 object_storage,
                 field_index.try_into()?,
-                b"\0".as_ptr() as *const _,
+                c_str!(b""),
             );
 
-            llvm::core::LLVMBuildLoad(ctx.builder, field_ptr, b"\0".as_ptr() as *const _)
+            llvm::core::LLVMBuildLoad(ctx.builder, field_ptr, c_str!(b""))
         }
     };
 

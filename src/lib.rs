@@ -1,5 +1,6 @@
 #![feature(box_patterns)]
 #![allow(clippy::collapsible_match)]
+#![feature(concat_bytes)]
 
 pub mod codegen;
 pub mod error;
