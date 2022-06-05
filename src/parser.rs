@@ -1,10 +1,9 @@
-use ariadne::{Color, Label, Report, ReportKind};
+use codespan_reporting::diagnostic::{Diagnostic, Label};
 use serde_json::json;
 
 use crate::{
-    error::{JsonError, ReportError},
     lexer::{Token, TokenKind},
-    span::{Span, Spanned},
+    span::{FileId, Span, Spanned},
     typechecker::Type,
 };
 
@@ -16,29 +15,28 @@ pub enum ParseError {
     UnexpectedEndOfInput(Span),
 }
 
-impl ReportError for ParseError {
-    fn report(&self) -> ariadne::Report<Span> {
+impl ParseError {
+    pub fn report(&self) -> Diagnostic<usize> {
         use ParseError::*;
         match *self {
-            UnexpectedToken(span) => Report::build(ReportKind::Error, (), span.start)
+            UnexpectedToken(span) => Diagnostic::error()
                 .with_message("unexpected token encountered")
-                .with_label(Label::new(span).with_color(Color::Red)),
-            ExpectedIdentifier(span) => Report::build(ReportKind::Error, (), span.start)
+                .with_labels(vec![Label::primary(span.source.0, span)]),
+            ExpectedIdentifier(span) => Diagnostic::error()
                 .with_message("expected identifier")
-                .with_label(Label::new(span).with_color(Color::Red)),
-            ExpectedToken(ref kind, span) => Report::build(ReportKind::Error, (), span.start)
+                .with_labels(vec![Label::primary(span.source.0, span)]),
+            ExpectedToken(ref kind, span) => Diagnostic::error()
                 .with_message(format!("expected token {}", kind.human_name()))
-                .with_label(Label::new(span).with_color(Color::Red)),
-            UnexpectedEndOfInput(span) => Report::build(ReportKind::Error, (), span.start)
+                .with_labels(vec![Label::primary(span.source.0, span)]),
+            UnexpectedEndOfInput(span) => Diagnostic::error()
                 .with_message("unexpected end of input")
-                .with_label(Label::new(span).with_color(Color::Red)),
+                .with_labels(vec![Label::primary(span.source.0, span)]),
         }
-        .finish()
     }
 }
 
-impl JsonError for ParseError {
-    fn json(&self) -> serde_json::Value {
+impl ParseError {
+    pub fn json(&self) -> serde_json::Value {
         use ParseError::*;
         match *self {
             UnexpectedToken(span) => json!({
@@ -242,7 +240,7 @@ macro_rules! expect {
         if matches!($tokens.get(*$idx)?, &Token { kind: $($kind)+, .. }) {
             *$idx += 1;
         } else {
-            $errors.push(ParseError::ExpectedToken($($kind)+, $tokens.get(*$idx)?.span()));
+            $errors.push(ParseError::ExpectedToken($($kind)+, $tokens.get(*$idx)?.span));
         }
     }};
 }
@@ -260,7 +258,7 @@ macro_rules! recover_at_token {
         {
             $errors.push(ParseError::ExpectedToken(
                 $($expected_kind)+,
-                $tokens.get(*$idx)?.span(),
+                $tokens.get(*$idx)?.span,
             ));
             *$idx += 1;
         }
@@ -313,7 +311,7 @@ pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<P
                     errors.append(&mut errs);
                 }
                 _ => {
-                    errors.push(ParseError::UnexpectedToken(token.span()));
+                    errors.push(ParseError::UnexpectedToken(token.span));
                     *idx += 1;
                 }
             }
@@ -322,9 +320,8 @@ pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<P
         .is_none();
 
         if reached_unexpected_eoi {
-            let last_span = tokens.last().unwrap().span();
-            let span = Span::new(last_span.start + last_span.len - 1, 1);
-            errors.push(ParseError::UnexpectedEndOfInput(span));
+            let last_span = tokens.last().unwrap().span;
+            errors.push(ParseError::UnexpectedEndOfInput(last_span));
             break;
         };
     }
@@ -449,7 +446,7 @@ fn parse_extern_function(
 
         (return_type, return_type_span)
     } else {
-        (Type::Unit, Span::new(0, 0))
+        (Type::Unit, Span::new(FileId(0), 0, 0))
     };
 
     // Semicolon should be the very next token, but if there was a parse error before
@@ -518,7 +515,7 @@ fn parse_function(tokens: &[Token], idx: &mut usize) -> Option<(ParsedFunction, 
 
         (return_type, return_type_span)
     } else {
-        (Type::Unit, Span::new(0, 0))
+        (Type::Unit, Span::new(FileId(0), 0, 0))
     };
 
     let (body, mut errs) = parse_block(tokens, idx)?;
@@ -556,9 +553,9 @@ fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Span, Vec<Pars
     } = tokens.get(*idx)?
     {
         *idx += 1;
-        (Type::from_string(name), tok.span())
+        (Type::from_string(name), tok.span)
     } else {
-        let span = tokens.get(*idx)?.span();
+        let span = tokens.get(*idx)?.span;
         errors.push(ParseError::ExpectedIdentifier(span));
         (Type::Unit, span)
     };
@@ -641,10 +638,10 @@ fn parse_statement(
             } = &tokens.get(*idx)?
             {
                 *idx += 1;
-                (name.clone(), tok.span())
+                (name.clone(), tok.span)
             } else {
-                errors.push(ParseError::ExpectedIdentifier(tokens.get(*idx)?.span()));
-                (String::new(), tokens.get(*idx)?.span())
+                errors.push(ParseError::ExpectedIdentifier(tokens.get(*idx)?.span));
+                (String::new(), tokens.get(*idx)?.span)
             };
 
             expect!(&mut errors, tokens, idx, TokenKind::Equal);
@@ -843,7 +840,7 @@ fn parse_expression(
                     if restriction == Restriction::NoStructLiteral {
                         // TODO: Add help for how to use struct literals in restricted expressions
                         *idx += 1; // Consume ident token
-                        (ParsedExpression::Variable(name.clone(), tok.span()), errors)
+                        (ParsedExpression::Variable(name.clone(), tok.span), errors)
                     } else {
                         let (struct_literal, mut errs) = parse_struct_literal(tokens, idx)?;
                         errors.append(&mut errs);
@@ -856,7 +853,7 @@ fn parse_expression(
                 }
                 _ => {
                     *idx += 1; // Consume ident token
-                    (ParsedExpression::Variable(name.clone(), tok.span()), errors)
+                    (ParsedExpression::Variable(name.clone(), tok.span), errors)
                 }
             },
             tok @ Token {
@@ -865,7 +862,7 @@ fn parse_expression(
             } => {
                 *idx += 1;
                 (
-                    ParsedExpression::Literal(Literal::String(string.clone(), tok.span())),
+                    ParsedExpression::Literal(Literal::String(string.clone(), tok.span)),
                     errors,
                 )
             }
@@ -875,7 +872,7 @@ fn parse_expression(
             } => {
                 *idx += 1;
                 (
-                    ParsedExpression::Literal(Literal::Int(*int, tok.span())),
+                    ParsedExpression::Literal(Literal::Int(*int, tok.span)),
                     errors,
                 )
             }
@@ -886,7 +883,7 @@ fn parse_expression(
                 *idx += 1;
                 let bool_value = matches!(tok.kind, TokenKind::True);
                 (
-                    ParsedExpression::Literal(Literal::Bool(bool_value, tok.span())),
+                    ParsedExpression::Literal(Literal::Bool(bool_value, tok.span)),
                     errors,
                 )
             }
@@ -901,7 +898,7 @@ fn parse_expression(
                 )
             }
             tok => {
-                errors.push(ParseError::UnexpectedToken(tok.span()));
+                errors.push(ParseError::UnexpectedToken(tok.span));
                 *idx += 1;
                 continue;
             }
@@ -995,7 +992,7 @@ fn parse_array_literal(
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::OBracket);
-    let o_brace_span = tokens[*idx - 1].span();
+    let o_brace_span = tokens[*idx - 1].span;
 
     let mut elements = vec![];
     while *idx < tokens.len()
@@ -1025,7 +1022,7 @@ fn parse_array_literal(
     }
 
     expect!(&mut errors, tokens, idx, TokenKind::CBracket);
-    let c_brace_span = tokens[*idx - 1].span();
+    let c_brace_span = tokens[*idx - 1].span;
 
     Some((
         ParsedArrayLiteral { elements },
@@ -1076,7 +1073,7 @@ fn parse_struct_literal(
     }
 
     expect!(&mut errors, tokens, idx, TokenKind::CBrace);
-    let c_brace_span = tokens[*idx - 1].span();
+    let c_brace_span = tokens[*idx - 1].span;
 
     Some((
         ParsedStructLiteral {
@@ -1124,7 +1121,7 @@ fn parse_function_call(
         }
     }
 
-    let cparen_span = tokens.get(*idx)?.span();
+    let cparen_span = tokens.get(*idx)?.span;
     expect!(&mut errors, tokens, idx, TokenKind::CParen);
 
     let func_call = ParsedFunctionCall {
@@ -1145,12 +1142,12 @@ fn parse_name(tokens: &[Token], idx: &mut usize) -> Option<(String, Span, Vec<Pa
         } = tokens.get(*idx)?
         {
             *idx += 1;
-            (name.clone(), tok.span(), vec![])
+            (name.clone(), tok.span, vec![])
         } else {
             (
                 String::new(),
-                tokens.get(*idx)?.span(),
-                vec![ParseError::ExpectedIdentifier(tokens.get(*idx)?.span())],
+                tokens.get(*idx)?.span,
+                vec![ParseError::ExpectedIdentifier(tokens.get(*idx)?.span)],
             )
         },
     )

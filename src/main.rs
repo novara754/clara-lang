@@ -1,10 +1,5 @@
-use ariadne::Source;
 use clap::Parser;
-use clara::{
-    codegen,
-    error::{JsonError, ReportError},
-    lexer, parser, typechecker,
-};
+use clara::{codegen, lexer, parser, span::FileId, typechecker};
 use std::{io::Read, path::PathBuf};
 
 #[derive(Debug, Parser)]
@@ -33,19 +28,31 @@ fn main() {
         (
             std::fs::read_to_string(&source_filepath)
                 .expect("first program argument should be readable source file"),
-            PathBuf::from(source_filepath),
+            PathBuf::from(&source_filepath),
         )
     };
 
-    let (tokens, lex_errors) = lexer::lex(&source);
+    let diagnostics_writer = codespan_reporting::term::termcolor::StandardStream::stderr(
+        codespan_reporting::term::termcolor::ColorChoice::Always,
+    );
+    let mut files = codespan_reporting::files::SimpleFiles::new();
+
+    let (tokens, lex_errors) = lexer::lex(FileId(0), &source);
 
     if args.json_diagnostics {
         for e in &lex_errors {
             println!("{}", e.json());
         }
     } else {
+        files.add(source_filepath, &source);
         for e in &lex_errors {
-            e.report().print(Source::from(&source)).unwrap();
+            codespan_reporting::term::emit(
+                &mut diagnostics_writer.lock(),
+                &codespan_reporting::term::Config::default(),
+                &files,
+                &e.report(),
+            )
+            .unwrap();
         }
     }
 
@@ -57,7 +64,13 @@ fn main() {
         }
     } else {
         for e in &parse_errors {
-            e.report().print(Source::from(&source)).unwrap();
+            codespan_reporting::term::emit(
+                &mut diagnostics_writer.lock(),
+                &codespan_reporting::term::Config::default(),
+                &files,
+                &e.report(),
+            )
+            .unwrap();
         }
     }
 
@@ -73,7 +86,13 @@ fn main() {
         }
     } else {
         for e in &typecheck_errors {
-            e.report().print(Source::from(&source)).unwrap();
+            codespan_reporting::term::emit(
+                &mut diagnostics_writer.lock(),
+                &codespan_reporting::term::Config::default(),
+                &files,
+                &e.report(),
+            )
+            .unwrap();
         }
     }
 

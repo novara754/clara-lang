@@ -1,10 +1,7 @@
-use ariadne::{Color, Label, Report, ReportKind};
+use codespan_reporting::diagnostic::{Diagnostic, Label};
 use serde_json::json;
 
-use crate::{
-    error::{JsonError, ReportError},
-    span::{Span, Spanned},
-};
+use crate::span::{FileId, Span};
 
 #[derive(Debug)]
 pub enum TokenKind {
@@ -94,34 +91,28 @@ pub enum LexError {
     InvalidInt(Span),
 }
 
-impl ReportError for LexError {
-    fn report(&self) -> Report<Span> {
+impl LexError {
+    pub fn report(&self) -> Diagnostic<usize> {
         use LexError::*;
         match *self {
-            UnknownToken(c, span) => Report::build(ReportKind::Error, (), span.start)
+            UnknownToken(c, span) => Diagnostic::error()
                 .with_message(format!("unknown token `{}`", c))
-                .with_label(Label::new(span).with_color(Color::Red)),
-            UnterminatedString(span) => Report::build(ReportKind::Error, (), span.start)
+                .with_labels(vec![Label::primary(span.source.0, span)]),
+            UnterminatedString(span) => Diagnostic::error()
                 .with_message("unterminated string")
-                .with_label(
-                    Label::new(span)
-                        .with_color(Color::Red)
-                        .with_message("Each string needs to be terminated with a matching `\"`."),
-                ),
-            InvalidInt(span) => Report::build(ReportKind::Error, (), span.start)
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    "Each string needs to be terminated with a matching `\"`.",
+                )]),
+            InvalidInt(span) => Diagnostic::error()
                 .with_message("invalid integer")
-                .with_label(
-                    Label::new(span)
-                        .with_message("value does not fit into signed 32-bit integer")
-                        .with_color(Color::Red),
-                ),
+                .with_labels(vec![Label::primary(span.source.0, span)
+                    .with_message("value does not fit into signed 32-bit integer")]),
         }
-        .finish()
     }
 }
 
-impl JsonError for LexError {
-    fn json(&self) -> serde_json::Value {
+impl LexError {
+    pub fn json(&self) -> serde_json::Value {
         use LexError::*;
         match *self {
             UnknownToken(c, span) => json!({
@@ -143,26 +134,16 @@ impl JsonError for LexError {
 #[derive(Debug)]
 pub struct Token {
     pub kind: TokenKind,
-    pub start: usize,
-    pub len: usize,
+    pub span: Span,
 }
 
 impl Token {
-    fn new(kind: TokenKind, start: usize, len: usize) -> Self {
-        Self { kind, start, len }
+    fn new(kind: TokenKind, span: Span) -> Self {
+        Self { kind, span }
     }
 }
 
-impl Spanned for Token {
-    fn span(&self) -> Span {
-        Span {
-            start: self.start,
-            len: self.len,
-        }
-    }
-}
-
-pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
+pub fn lex(file_id: FileId, source: &str) -> (Vec<Token>, Vec<LexError>) {
     let source = source.as_bytes();
     let mut idx = 0;
 
@@ -213,7 +194,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 "return" => TokenKind::Return,
                 _ => TokenKind::Ident(name.to_owned()),
             };
-            tokens.push(Token::new(kind, start, len));
+            tokens.push(Token::new(kind, Span::new(file_id, start, len)));
 
             continue;
         }
@@ -228,7 +209,11 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
             }
 
             if idx == source.len() {
-                errors.push(LexError::UnterminatedString(Span::new(start, idx - start)));
+                errors.push(LexError::UnterminatedString(Span::new(
+                    file_id,
+                    start,
+                    idx - start,
+                )));
             } else {
                 idx += 1; // Consume closing quote
             }
@@ -237,8 +222,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 // The string had no content and no closing quote
                 tokens.push(Token::new(
                     TokenKind::StringLiteral(String::new()),
-                    start,
-                    1,
+                    Span::new(file_id, start, 1),
                 ));
             } else {
                 // +1 and -1 on the bounds to exclude quotation marks
@@ -248,8 +232,7 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
 
                 tokens.push(Token::new(
                     TokenKind::StringLiteral(string),
-                    start,
-                    idx - start,
+                    Span::new(file_id, start, idx - start),
                 ));
             }
 
@@ -267,42 +250,41 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 if let Ok(int_value) = std::str::from_utf8(&source[start..idx]).unwrap().parse() {
                     int_value
                 } else {
-                    errors.push(LexError::InvalidInt(Span::new(start, idx - start)));
+                    errors.push(LexError::InvalidInt(Span::new(file_id, start, idx - start)));
                     0
                 };
 
             tokens.push(Token::new(
                 TokenKind::IntLiteral(int_value),
-                start,
-                idx - start,
+                Span::new(file_id, start, idx - start),
             ));
 
             continue;
         }
 
         let mut unknown_char = |c: char| {
-            tokens.push(Token::new(TokenKind::Unknown, idx, 1));
-            errors.push(LexError::UnknownToken(c, Span::new(idx, 1)));
+            tokens.push(Token::new(TokenKind::Unknown, Span::new(file_id, idx, 1)));
+            errors.push(LexError::UnknownToken(c, Span::new(file_id, idx, 1)));
         };
 
         match source[idx] {
-            b'(' => tokens.push(Token::new(TokenKind::OParen, idx, 1)),
-            b')' => tokens.push(Token::new(TokenKind::CParen, idx, 1)),
-            b'{' => tokens.push(Token::new(TokenKind::OBrace, idx, 1)),
-            b'}' => tokens.push(Token::new(TokenKind::CBrace, idx, 1)),
-            b'[' => tokens.push(Token::new(TokenKind::OBracket, idx, 1)),
-            b']' => tokens.push(Token::new(TokenKind::CBracket, idx, 1)),
-            b';' => tokens.push(Token::new(TokenKind::SemiColon, idx, 1)),
-            b',' => tokens.push(Token::new(TokenKind::Comma, idx, 1)),
-            b':' => tokens.push(Token::new(TokenKind::Colon, idx, 1)),
-            b'+' => tokens.push(Token::new(TokenKind::Plus, idx, 1)),
+            b'(' => tokens.push(Token::new(TokenKind::OParen, Span::new(file_id, idx, 1))),
+            b')' => tokens.push(Token::new(TokenKind::CParen, Span::new(file_id, idx, 1))),
+            b'{' => tokens.push(Token::new(TokenKind::OBrace, Span::new(file_id, idx, 1))),
+            b'}' => tokens.push(Token::new(TokenKind::CBrace, Span::new(file_id, idx, 1))),
+            b'[' => tokens.push(Token::new(TokenKind::OBracket, Span::new(file_id, idx, 1))),
+            b']' => tokens.push(Token::new(TokenKind::CBracket, Span::new(file_id, idx, 1))),
+            b';' => tokens.push(Token::new(TokenKind::SemiColon, Span::new(file_id, idx, 1))),
+            b',' => tokens.push(Token::new(TokenKind::Comma, Span::new(file_id, idx, 1))),
+            b':' => tokens.push(Token::new(TokenKind::Colon, Span::new(file_id, idx, 1))),
+            b'+' => tokens.push(Token::new(TokenKind::Plus, Span::new(file_id, idx, 1))),
             b'=' => {
                 let token = match source.get(idx + 1) {
                     Some(b'=') => {
                         idx += 1;
-                        Token::new(TokenKind::EqualEqual, idx - 1, 2)
+                        Token::new(TokenKind::EqualEqual, Span::new(file_id, idx - 1, 2))
                     }
-                    _ => Token::new(TokenKind::Equal, idx, 2),
+                    _ => Token::new(TokenKind::Equal, Span::new(file_id, idx, 2)),
                 };
                 tokens.push(token);
             }
@@ -310,9 +292,9 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 let token = match source.get(idx + 1) {
                     Some(b'=') => {
                         idx += 1;
-                        Token::new(TokenKind::LessThanEqual, idx - 1, 2)
+                        Token::new(TokenKind::LessThanEqual, Span::new(file_id, idx - 1, 2))
                     }
-                    _ => Token::new(TokenKind::LessThan, idx, 2),
+                    _ => Token::new(TokenKind::LessThan, Span::new(file_id, idx, 2)),
                 };
                 tokens.push(token);
             }
@@ -320,16 +302,19 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexError>) {
                 let token = match source.get(idx + 1) {
                     Some(b'=') => {
                         idx += 1;
-                        Token::new(TokenKind::GreaterThanEqual, idx - 1, 2)
+                        Token::new(TokenKind::GreaterThanEqual, Span::new(file_id, idx - 1, 2))
                     }
-                    _ => Token::new(TokenKind::GreaterThan, idx, 2),
+                    _ => Token::new(TokenKind::GreaterThan, Span::new(file_id, idx, 2)),
                 };
                 tokens.push(token);
             }
-            b'.' => tokens.push(Token::new(TokenKind::Dot, idx, 1)),
+            b'.' => tokens.push(Token::new(TokenKind::Dot, Span::new(file_id, idx, 1))),
             b'-' => match source.get(idx + 1) {
                 Some(b'>') => {
-                    tokens.push(Token::new(TokenKind::RightArrow, idx, 2));
+                    tokens.push(Token::new(
+                        TokenKind::RightArrow,
+                        Span::new(file_id, idx, 2),
+                    ));
                     idx += 1;
                 }
                 _ => unknown_char('-'),

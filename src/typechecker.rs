@@ -1,10 +1,9 @@
 use std::collections::{hash_map::Entry, HashMap};
 
-use ariadne::{Color, Label, Report, ReportKind};
+use codespan_reporting::diagnostic::{Diagnostic, Label};
 use serde_json::json;
 
 use crate::{
-    error::{JsonError, ReportError},
     parser::{
         CompareOperation, FunctionParameter, Literal, MathOperation, ParsedBlock, ParsedExpression,
         ParsedFunction, ParsedProgram, ParsedStatement, ParsedStruct,
@@ -97,38 +96,30 @@ pub enum TypeCheckError {
     InvalidIterableInForIn(Type, Span),
 }
 
-impl ReportError for TypeCheckError {
-    fn report(&self) -> Report<Span> {
+impl TypeCheckError {
+    pub fn report(&self) -> Diagnostic<usize> {
         match *self {
-            Self::WrongNumArgs(span, actual, expected) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("incorrect number of arguments to function call")
-                    .with_label(Label::new(span).with_color(Color::Red))
-                    .with_note(format!(
-                        "function expects {} arguments but {} were provided",
-                        expected, actual
-                    ))
-            }
-            Self::WrongArgType(span, ref actual, ref expected) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("incorrect argument type in function call")
-                    .with_label(
-                        Label::new(span)
-                            .with_color(Color::Red)
-                            .with_message(format!(
-                                "argument has type {} but function expects {}",
-                                actual.to_str(),
-                                expected.to_str()
-                            )),
-                    )
-            }
-            Self::UnknownFunction(ref function_name, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message(format!("reference to unknown function `{}`", function_name))
-                    .with_label(Label::new(span).with_color(Color::Red))
-            }
+            Self::WrongNumArgs(span, actual, expected) => Diagnostic::error()
+                .with_message("incorrect number of arguments to function call")
+                .with_labels(vec![Label::primary(span.source.0, span)])
+                .with_notes(vec![format!(
+                    "function expects {} arguments but {} were provided",
+                    expected, actual
+                )]),
+            Self::WrongArgType(span, ref actual, ref expected) => Diagnostic::error()
+                .with_message("incorrect argument type in function call")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!(
+                        "argument has type {} but function expects {}",
+                        actual.to_str(),
+                        expected.to_str()
+                    ),
+                )]),
+            Self::UnknownFunction(ref function_name, span) => Diagnostic::error()
+                .with_message(format!("reference to unknown function `{}`", function_name))
+                .with_labels(vec![Label::primary(span.source.0, span)]),
             Self::UnknownVariable(ref variable_name, ref function_name, span) => {
-                let report = Report::build(ReportKind::Error, (), span.start);
+                let report = Diagnostic::error();
                 if let Some(function_name) = function_name {
                     report.with_message(format!(
                         "reference to unknown variable `{}` in function `{}`",
@@ -138,93 +129,70 @@ impl ReportError for TypeCheckError {
                     report
                         .with_message(format!("reference to unknown variable `{}`", variable_name))
                 }
-                .with_label(Label::new(span).with_color(Color::Red))
+                .with_labels(vec![Label::primary(span.source.0, span)])
             }
-            Self::WrongConditionType(span, ref actual) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("incorrect type in condition")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!("expression has type {}", actual.to_str()))
-                            .with_color(Color::Red),
-                    )
-                    .with_note(format!(
-                        "expression in condition has to be of type {}",
-                        Type::Bool.to_str()
-                    ))
-            }
+            Self::WrongConditionType(span, ref actual) => Diagnostic::error()
+                .with_message("incorrect type in condition")
+                .with_labels(vec![Label::primary(span.source.0, span)
+                    .with_message(format!("expression has type {}", actual.to_str()))])
+                .with_notes(vec![format!(
+                    "expression in condition has to be of type {}",
+                    Type::Bool.to_str()
+                )]),
             Self::BinaryOpMismatch(ref lhs_type, ref rhs_type, lhs_span, rhs_span) => {
-                Report::build(ReportKind::Error, (), lhs_span.start)
+                Diagnostic::error()
                     .with_message("type mismatch in binary operator")
-                    .with_label(
-                        Label::new(lhs_span)
-                            .with_message(format!("left operand has type {}", lhs_type.to_str()))
-                            .with_color(Color::Red),
-                    )
-                    .with_label(
-                        Label::new(rhs_span)
-                            .with_message(format!("right operand has type {}", rhs_type.to_str()))
-                            .with_color(Color::Red),
-                    )
-                    .with_note("Both sides of the operator need to have the same type")
+                    .with_labels(vec![
+                        Label::primary(lhs_span.source.0, lhs_span)
+                            .with_message(format!("left operand has type {}", lhs_type.to_str())),
+                        Label::primary(rhs_span.source.0, rhs_span)
+                            .with_message(format!("right operand has type {}", rhs_type.to_str())),
+                    ])
+                    .with_notes(vec![
+                        "Both sides of the operator need to have the same type".to_string(),
+                    ])
             }
-            Self::UnknownType(ref type_name, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message(format!("reference to unknown type `{}`", type_name))
-                    .with_label(
-                        Label::new(span)
-                            .with_message("type is referenced here")
-                            .with_color(Color::Red),
-                    )
-            }
-            Self::OpaqueStructFieldAccess(ref object_type, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("field access on opaque struct")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "cannot access fields of opaque struct type {}",
-                                object_type.to_str()
-                            ))
-                            .with_color(Color::Red),
-                    )
-            }
+            Self::UnknownType(ref type_name, span) => Diagnostic::error()
+                .with_message(format!("reference to unknown type `{}`", type_name))
+                .with_labels(vec![
+                    Label::primary(span.source.0, span).with_message("type is referenced here")
+                ]),
+            Self::OpaqueStructFieldAccess(ref object_type, span) => Diagnostic::error()
+                .with_message("field access on opaque struct")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!(
+                        "cannot access fields of opaque struct type {}",
+                        object_type.to_str()
+                    ),
+                )]),
             Self::FieldAccessInvalidField(ref object_type, ref field_name, span) => {
-                Report::build(ReportKind::Error, (), span.start)
+                Diagnostic::error()
                     .with_message("invalid struct field")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "struct type {} has no field by the name of `{}`",
-                                object_type.to_str(),
-                                field_name
-                            ))
-                            .with_color(Color::Red),
-                    )
+                    .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                        format!(
+                            "struct type {} has no field by the name of `{}`",
+                            object_type.to_str(),
+                            field_name
+                        ),
+                    )])
             }
-            Self::ObjectIsNotAStruct(ref object_type, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("object is not a struct")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "trying to access field on non-struct type {}",
-                                object_type.to_str()
-                            ))
-                            .with_color(Color::Red),
-                    )
-            }
+            Self::ObjectIsNotAStruct(ref object_type, span) => Diagnostic::error()
+                .with_message("object is not a struct")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!(
+                        "trying to access field on non-struct type {}",
+                        object_type.to_str()
+                    ),
+                )]),
             Self::StructMissingField(ref struct_name, ref missing_field_name, span) => {
-                Report::build(ReportKind::Error, (), span.start)
+                Diagnostic::error()
                     .with_message("missing field in struct literal")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "missing field `{}` in literal for struct `{}`",
-                                missing_field_name, struct_name
-                            ))
-                            .with_color(Color::Red),
-                    )
+                    .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                        format!(
+                            "missing field `{}` in literal for struct `{}`",
+                            missing_field_name, struct_name
+                        ),
+                    )])
             }
             Self::StructFieldWrongType(
                 ref struct_name,
@@ -232,115 +200,81 @@ impl ReportError for TypeCheckError {
                 ref actual,
                 ref expected,
                 span,
-            ) => Report::build(ReportKind::Error, (), span.start)
+            ) => Diagnostic::error()
                 .with_message("wrong type for field in struct literal")
-                .with_label(
-                    Label::new(span)
-                        .with_message(format!(
-                            "expression has type {} but struct expects type {}",
-                            actual.to_str(),
-                            expected.to_str()
-                        ))
-                        .with_color(Color::Red),
-                )
-                .with_note(format!(
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!(
+                        "expression has type {} but struct expects type {}",
+                        actual.to_str(),
+                        expected.to_str()
+                    ),
+                )])
+                .with_notes(vec![format!(
                     "Field `{}` on struct `{}` has type `{}`",
                     field_name,
                     struct_name,
                     expected.to_str()
-                )),
+                )]),
             Self::StructSuperfluousField(ref struct_name, ref field_name, span) => {
-                Report::build(ReportKind::Error, (), span.start)
+                Diagnostic::error()
                     .with_message("incorrect field in struct literal")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "no field `{}` on struct `{}`",
-                                field_name, struct_name
-                            ))
-                            .with_color(Color::Red),
-                    )
+                    .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                        format!("no field `{}` on struct `{}`", field_name, struct_name),
+                    )])
             }
-            Self::InvalidReturnType(ref actual, ref expected, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("type of return value does not match expected return type")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "expression has type `{}` but function expected type `{}`",
-                                actual.to_str(),
-                                expected.to_str(),
-                            ))
-                            .with_color(Color::Red),
-                    )
-            }
-            Self::DuplicateParameterName(ref name, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("duplicate parameter name in function")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "parameter name `{name}` has already been used in this function"
-                            ))
-                            .with_color(Color::Red),
-                    )
-            }
-            Self::DuplicateVariableName(ref name, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("duplicate variable name in function")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "variable name `{name}` has already been used in this function"
-                            ))
-                            .with_color(Color::Red),
-                    )
-            }
-            Self::DuplicateFuncStructName(ref name, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("duplicate function or struct name")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "function or struct name `{name}` has already been used"
-                            ))
-                            .with_color(Color::Red),
-                    )
-            }
-            Self::WrongElementTypeInArray(ref actual, ref expected, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("wrong type for element in array literal")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "expression has type `{}` but array expected type `{}`",
-                                actual.to_str(),
-                                expected.to_str()
-                            ))
-                            .with_color(Color::Red),
-                    )
-                    .with_note("All elements of an array must have the same type")
-            }
-            Self::InvalidIterableInForIn(ref actual, span) => {
-                Report::build(ReportKind::Error, (), span.start)
-                    .with_message("wrong type for iterable in for-in loop")
-                    .with_label(
-                        Label::new(span)
-                            .with_message(format!(
-                                "expression has type `{}` expected array type",
-                                actual.to_str()
-                            ))
-                            .with_color(Color::Red),
-                    )
-                    .with_note("For-in loops currently only support arrays as iterables")
-            }
+            Self::InvalidReturnType(ref actual, ref expected, span) => Diagnostic::error()
+                .with_message("type of return value does not match expected return type")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!(
+                        "expression has type `{}` but function expected type `{}`",
+                        actual.to_str(),
+                        expected.to_str(),
+                    ),
+                )]),
+            Self::DuplicateParameterName(ref name, span) => Diagnostic::error()
+                .with_message("duplicate parameter name in function")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!("parameter name `{name}` has already been used in this function"),
+                )]),
+            Self::DuplicateVariableName(ref name, span) => Diagnostic::error()
+                .with_message("duplicate variable name in function")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!("variable name `{name}` has already been used in this function"),
+                )]),
+            Self::DuplicateFuncStructName(ref name, span) => Diagnostic::error()
+                .with_message("duplicate function or struct name")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!("function or struct name `{name}` has already been used"),
+                )]),
+            Self::WrongElementTypeInArray(ref actual, ref expected, span) => Diagnostic::error()
+                .with_message("wrong type for element in array literal")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!(
+                        "expression has type `{}` but array expected type `{}`",
+                        actual.to_str(),
+                        expected.to_str()
+                    ),
+                )])
+                .with_notes(vec![
+                    "All elements of an array must have the same type".to_string()
+                ]),
+            Self::InvalidIterableInForIn(ref actual, span) => Diagnostic::error()
+                .with_message("wrong type for iterable in for-in loop")
+                .with_labels(vec![Label::primary(span.source.0, span).with_message(
+                    format!(
+                        "expression has type `{}` expected array type",
+                        actual.to_str()
+                    ),
+                )])
+                .with_notes(vec![format!(
+                    "For-in loops currently only support arrays as iterables"
+                )]),
         }
-        .finish()
     }
 }
 
-impl JsonError for TypeCheckError {
-    fn json(&self) -> serde_json::Value {
+impl TypeCheckError {
+    pub fn json(&self) -> serde_json::Value {
         match *self {
             Self::WrongNumArgs(span, actual, expected) => json!({
                 "message":
