@@ -2,10 +2,15 @@
 
 void print_int(int n)
 {
-  printf("%d\n", n);
+  printf("%d", n);
+}
+
+void print_ln(void)
+{
+  puts("");
 }
 
 void print_str(char *s)
 {
-  puts(s);
+  printf("%s", s);
 }

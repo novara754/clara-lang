@@ -94,6 +94,7 @@ pub enum TypeCheckError {
     DuplicateVariableName(String, Span),
     DuplicateFuncStructName(String, Span),
     WrongElementTypeInArray(Type, Type, Span),
+    InvalidIterableInForIn(Type, Span),
 }
 
 impl ReportError for TypeCheckError {
@@ -320,6 +321,19 @@ impl ReportError for TypeCheckError {
                     )
                     .with_note("All elements of an array must have the same type")
             }
+            Self::InvalidIterableInForIn(ref actual, span) => {
+                Report::build(ReportKind::Error, (), span.start)
+                    .with_message("wrong type for iterable in for-in loop")
+                    .with_label(
+                        Label::new(span)
+                            .with_message(format!(
+                                "expression has type `{}` expected array type",
+                                actual.to_str()
+                            ))
+                            .with_color(Color::Red),
+                    )
+                    .with_note("For-in loops currently only support arrays as iterables")
+            }
         }
         .finish()
     }
@@ -466,6 +480,14 @@ impl JsonError for TypeCheckError {
                     ),
                     "span": span.json(),
             }),
+            Self::InvalidIterableInForIn(ref actual, span) => json!({
+                "message":
+                    format!(
+                        "element has type `{}` but expected array in for-in loop",
+                        actual.to_str(),
+                    ),
+                "span": span.json(),
+            }),
         }
     }
 }
@@ -558,11 +580,21 @@ pub struct CheckedIfElse {
 }
 
 #[derive(Debug)]
+pub struct CheckedForInLoop {
+    pub elem_var_name: String,
+    pub elem_var_type: Type,
+    pub index_var: Option<String>,
+    pub iterable: CheckedExpression,
+    pub body: CheckedBlock,
+}
+
+#[derive(Debug)]
 pub enum CheckedStatement {
     Expression(CheckedExpression),
     LetAssign(String, CheckedExpression),
     WhileLoop(CheckedWhileLoop),
     IfElse(CheckedIfElse),
+    ForInLoop(CheckedForInLoop),
     Return(CheckedExpression),
 }
 
@@ -619,11 +651,11 @@ struct Function {
 
 #[derive(Debug, Default)]
 struct ScopeStack {
-    stack: Vec<(String, HashMap<String, Type>)>,
+    stack: Vec<(Option<String>, HashMap<String, Type>)>,
 }
 
 impl ScopeStack {
-    fn push_scope(&mut self, function_name: String) {
+    fn push_scope(&mut self, function_name: Option<String>) {
         self.stack.push((function_name, HashMap::default()));
     }
 
@@ -658,7 +690,12 @@ impl ScopeStack {
     }
 
     fn get_current_function(&self) -> Option<&str> {
-        self.stack.last().map(|scope| scope.0.as_str())
+        for scope in self.stack.iter().rev() {
+            if let Some(ref function_name) = scope.0 {
+                return Some(function_name);
+            }
+        }
+        None
     }
 }
 
@@ -839,7 +876,7 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
                 ));
             }
 
-            context.scope_stack.push_scope(func.name.clone());
+            context.scope_stack.push_scope(Some(func.name.clone()));
             context.current_function = Some(func);
 
             for param in &func.parameters {
@@ -879,6 +916,7 @@ fn typecheck_block(
 ) -> (CheckedBlock, Vec<TypeCheckError>) {
     let mut errors = vec![];
 
+    context.scope_stack.push_scope(None);
     let statements = block
         .statements
         .iter()
@@ -888,6 +926,7 @@ fn typecheck_block(
             checked_stmt
         })
         .collect();
+    context.scope_stack.pop_scope();
 
     (CheckedBlock { statements }, errors)
 }
@@ -971,6 +1010,60 @@ fn typecheck_statement(
                     condition: checked_condition,
                     if_body: checked_if_body,
                     else_body: checked_else_body,
+                }),
+                errors,
+            )
+        }
+        ParsedStatement::ForInLoop(for_in) => {
+            let mut errors = vec![];
+
+            let (checked_iterable, mut errs) =
+                typecheck_expression(context, &for_in.iterable_value);
+            errors.append(&mut errs);
+
+            let elem_type = if let Type::Array(box elem_type, _) = checked_iterable.ttype() {
+                elem_type
+            } else {
+                errors.push(TypeCheckError::InvalidIterableInForIn(
+                    checked_iterable.ttype(),
+                    for_in.iterable_value.span(),
+                ));
+                Type::Incomplete
+            };
+
+            context.scope_stack.push_scope(None);
+
+            if context
+                .scope_stack
+                .add_variable(&for_in.elem_var_name, elem_type.clone())
+            {
+                errors.push(TypeCheckError::DuplicateVariableName(
+                    for_in.elem_var_name.clone(),
+                    for_in.elem_var_name_span,
+                ));
+            }
+
+            if let Some((ref index_var_name, index_var_name_span)) = for_in.index_var {
+                if context.scope_stack.add_variable(index_var_name, Type::Int) {
+                    errors.push(TypeCheckError::DuplicateVariableName(
+                        for_in.elem_var_name.clone(),
+                        index_var_name_span,
+                    ));
+                }
+            }
+
+            let (checked_body, mut errs) = typecheck_block(context, &for_in.body);
+            errors.append(&mut errs);
+
+            context.scope_stack.pop_scope();
+
+            (
+                CheckedStatement::ForInLoop(CheckedForInLoop {
+                    elem_var_name: for_in.elem_var_name.clone(),
+                    elem_var_type: elem_type,
+                    index_var: for_in.index_var.clone().map(|(name, _)| name),
+                    iterable: checked_iterable,
+                    body: checked_body,
                 }),
                 errors,
             )

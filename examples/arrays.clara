@@ -1,4 +1,14 @@
+extern fn print_int(x: int);
+extern fn print_str(s: ->c_char);
+extern fn print_ln();
+
 fn main() {
-  let xs = [1, 2, 3, 4];
-  let ys = [0, 0, 0, 0];
+  let xs = [1, 2, 3, 4, 5, 6, 7];
+
+  for i, x in xs {
+    print_int(i);
+    print_str(" ");
+    print_int(x);
+    print_ln();
+  }
 }

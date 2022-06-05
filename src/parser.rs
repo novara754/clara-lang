@@ -61,6 +61,12 @@ impl JsonError for ParseError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Restriction {
+    None,
+    NoStructLiteral,
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedFunctionCall {
     pub name: String,
@@ -161,6 +167,15 @@ pub struct ParsedIfElse {
 }
 
 #[derive(Debug)]
+pub struct ParsedForInLoop {
+    pub elem_var_name: String,
+    pub elem_var_name_span: Span,
+    pub index_var: Option<(String, Span)>,
+    pub iterable_value: ParsedExpression,
+    pub body: ParsedBlock,
+}
+
+#[derive(Debug)]
 pub struct ParsedLetAssign {
     pub name: String,
     pub name_span: Span,
@@ -173,6 +188,7 @@ pub enum ParsedStatement {
     LetAssign(ParsedLetAssign),
     WhileLoop(ParsedWhileLoop),
     IfElse(ParsedIfElse),
+    ForInLoop(ParsedForInLoop),
     Return(ParsedExpression),
 }
 
@@ -633,7 +649,7 @@ fn parse_statement(
 
             expect!(&mut errors, tokens, idx, TokenKind::Equal);
 
-            let (value, mut errs) = parse_expression(tokens, idx)?;
+            let (value, mut errs) = parse_expression(tokens, idx, Restriction::None)?;
             errors.append(&mut errs);
 
             (
@@ -661,15 +677,22 @@ fn parse_statement(
             (ParsedStatement::IfElse(if_else), errors, false)
         }
         Token {
+            kind: TokenKind::For,
+            ..
+        } => {
+            let (for_in, errors) = parse_for_in_loop(tokens, idx)?;
+            (ParsedStatement::ForInLoop(for_in), errors, false)
+        }
+        Token {
             kind: TokenKind::Return,
             ..
         } => {
             *idx += 1; // Consume `return` token
-            let (return_value, errors) = parse_expression(tokens, idx)?;
+            let (return_value, errors) = parse_expression(tokens, idx, Restriction::None)?;
             (ParsedStatement::Return(return_value), errors, true)
         }
         _ => {
-            let (expr, errors) = parse_expression(tokens, idx)?;
+            let (expr, errors) = parse_expression(tokens, idx, Restriction::None)?;
             (ParsedStatement::Expression(expr), errors, true)
         }
     };
@@ -684,6 +707,60 @@ fn parse_statement(
     Some((statement, errors))
 }
 
+fn parse_for_in_loop(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(ParsedForInLoop, Vec<ParseError>)> {
+    let mut errors = vec![];
+
+    expect!(&mut errors, tokens, idx, TokenKind::For);
+
+    let ((elem_var_name, elem_var_name_span), index_var) = if matches!(
+        tokens.get(*idx + 1),
+        Some(Token {
+            kind: TokenKind::Comma,
+            ..
+        })
+    ) {
+        let (index_var_name, index_var_name_span, mut errs) = parse_name(tokens, idx)?;
+        errors.append(&mut errs);
+
+        expect!(&mut errors, tokens, idx, TokenKind::Comma);
+
+        let (elem_var_name, elem_var_name_span, mut errs) = parse_name(tokens, idx)?;
+        errors.append(&mut errs);
+
+        (
+            (elem_var_name, elem_var_name_span),
+            Some((index_var_name, index_var_name_span)),
+        )
+    } else {
+        let (elem_var_name, elem_var_name_span, mut errs) = parse_name(tokens, idx)?;
+        errors.append(&mut errs);
+
+        ((elem_var_name, elem_var_name_span), None)
+    };
+
+    expect!(&mut errors, tokens, idx, TokenKind::In);
+
+    let (iterable_value, mut errs) = parse_expression(tokens, idx, Restriction::NoStructLiteral)?;
+    errors.append(&mut errs);
+
+    let (body, mut errs) = parse_block(tokens, idx)?;
+    errors.append(&mut errs);
+
+    Some((
+        ParsedForInLoop {
+            elem_var_name,
+            elem_var_name_span,
+            index_var,
+            iterable_value,
+            body,
+        },
+        errors,
+    ))
+}
+
 fn parse_while_loop(
     tokens: &[Token],
     idx: &mut usize,
@@ -692,7 +769,7 @@ fn parse_while_loop(
 
     expect!(&mut errors, tokens, idx, TokenKind::While);
 
-    let (condition, mut errs) = parse_expression(tokens, idx)?;
+    let (condition, mut errs) = parse_expression(tokens, idx, Restriction::NoStructLiteral)?;
     errors.append(&mut errs);
 
     let (body, mut errs) = parse_block(tokens, idx)?;
@@ -706,7 +783,7 @@ fn parse_if_else(tokens: &[Token], idx: &mut usize) -> Option<(ParsedIfElse, Vec
 
     expect!(&mut errors, tokens, idx, TokenKind::If);
 
-    let (condition, mut errs) = parse_expression(tokens, idx)?;
+    let (condition, mut errs) = parse_expression(tokens, idx, Restriction::NoStructLiteral)?;
     errors.append(&mut errs);
 
     let (if_body, mut errs) = parse_block(tokens, idx)?;
@@ -742,6 +819,7 @@ fn parse_if_else(tokens: &[Token], idx: &mut usize) -> Option<(ParsedIfElse, Vec
 fn parse_expression(
     tokens: &[Token],
     idx: &mut usize,
+    restriction: Restriction,
 ) -> Option<(ParsedExpression, Vec<ParseError>)> {
     let mut errors = vec![];
     let (expr, mut errors) = loop {
@@ -762,16 +840,22 @@ fn parse_expression(
                     kind: TokenKind::OBrace,
                     ..
                 }) => {
-                    let (struct_literal, mut errs) = parse_struct_literal(tokens, idx)?;
-                    errors.append(&mut errs);
-                    let span = struct_literal.span;
-                    (
-                        ParsedExpression::Literal(Literal::Struct(struct_literal, span)),
-                        errors,
-                    )
+                    if restriction == Restriction::NoStructLiteral {
+                        // TODO: Add help for how to use struct literals in restricted expressions
+                        *idx += 1; // Consume ident token
+                        (ParsedExpression::Variable(name.clone(), tok.span()), errors)
+                    } else {
+                        let (struct_literal, mut errs) = parse_struct_literal(tokens, idx)?;
+                        errors.append(&mut errs);
+                        let span = struct_literal.span;
+                        (
+                            ParsedExpression::Literal(Literal::Struct(struct_literal, span)),
+                            errors,
+                        )
+                    }
                 }
                 _ => {
-                    *idx += 1;
+                    *idx += 1; // Consume ident token
                     (ParsedExpression::Variable(name.clone(), tok.span()), errors)
                 }
             },
@@ -862,7 +946,7 @@ fn parse_expression(
             _ => unreachable!(),
         };
 
-        let (rhs, mut errs) = parse_expression(tokens, idx)?;
+        let (rhs, mut errs) = parse_expression(tokens, idx, restriction)?;
         errors.append(&mut errs);
 
         ParsedExpression::MathOp(Box::new(expr), Box::new(rhs), op)
@@ -893,7 +977,7 @@ fn parse_expression(
             _ => unreachable!(),
         };
 
-        let (rhs, mut errs) = parse_expression(tokens, idx)?;
+        let (rhs, mut errs) = parse_expression(tokens, idx, restriction)?;
         errors.append(&mut errs);
 
         ParsedExpression::CompareOp(Box::new(expr), Box::new(rhs), op)
@@ -923,7 +1007,7 @@ fn parse_array_literal(
             }
         )
     {
-        let (arg, mut errs) = parse_expression(tokens, idx)?;
+        let (arg, mut errs) = parse_expression(tokens, idx, Restriction::None)?;
         elements.push(arg);
         errors.append(&mut errs);
 
@@ -973,7 +1057,7 @@ fn parse_struct_literal(
 
         expect!(&mut errors, tokens, idx, TokenKind::Colon);
 
-        let (field_value, mut errs) = parse_expression(tokens, idx)?;
+        let (field_value, mut errs) = parse_expression(tokens, idx, Restriction::None)?;
         errors.append(&mut errs);
 
         fields.push((field_name, field_name_span, field_value));
@@ -1023,7 +1107,7 @@ fn parse_function_call(
             }
         )
     {
-        let (arg, mut errs) = parse_expression(tokens, idx)?;
+        let (arg, mut errs) = parse_expression(tokens, idx, Restriction::None)?;
         args.push(arg);
         errors.append(&mut errs);
 

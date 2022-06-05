@@ -42,11 +42,11 @@ That being said, the following features have already been implemented:
   - [x] Strings
   - [x] Integers
   - [x] Bools
-  - [ ] Arrays
+  - [x] Arrays
 - [ ] Control flow
   - [x] If-else statements
   - [x] While loops
-  - [ ] For loops
+  - [x] For loops
 - [ ] FFI
   - [x] Using C functions as extern functions
   - [x] Using opaque C structs
