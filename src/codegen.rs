@@ -69,7 +69,11 @@ struct EmitContext {
     scope_stack: ScopeStack,
 }
 
-pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre::Result<()> {
+pub fn generate_executable<P>(
+    _o_filepath: P,
+    program: &CheckedProgram,
+    print_llir: bool,
+) -> eyre::Result<()> {
     unsafe {
         llvm::target::LLVM_InitializeAllTargetInfos();
         llvm::target::LLVM_InitializeAllTargets();
@@ -133,7 +137,9 @@ pub fn generate_executable<P>(_o_filepath: P, program: &CheckedProgram) -> eyre:
             }
         }
 
-        llvm::core::LLVMDumpModule(module);
+        if print_llir {
+            llvm::core::LLVMDumpModule(module);
+        }
         llvm::core::LLVMDisposeBuilder(builder);
         llvm::core::LLVMDisposeModule(module);
         llvm::core::LLVMContextDispose(context);

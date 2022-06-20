@@ -11,6 +11,9 @@ struct Args {
     #[clap(long)]
     no_emit: bool,
 
+    #[clap(long)]
+    print_llir: bool,
+
     input: String,
 }
 
@@ -110,5 +113,5 @@ fn main() {
             .file_stem()
             .unwrap_or_else(|| source_file.file_name().unwrap()),
     );
-    codegen::generate_executable(&o_filepath, &checked_program).unwrap();
+    codegen::generate_executable(&o_filepath, &checked_program, args.print_llir).unwrap();
 }
