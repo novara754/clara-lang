@@ -502,8 +502,6 @@ unsafe fn emit_expression(
             CheckedLiteral::Struct(struct_literal, r#struct, struct_type) => {
                 let struct_type_ref = type_to_llvm(ctx, struct_type)?;
 
-                println!("{:#?}", r#struct);
-
                 let mut field_values: Vec<LLVMValueRef> = r#struct
                     .fields
                     .iter()

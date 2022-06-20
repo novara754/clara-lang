@@ -38,6 +38,9 @@ pub enum TokenKind {
     GreaterThanEqual,
     LessThanEqual,
     Plus,
+    Minus,
+    Star,
+    Slash,
     Dot,
     Unknown,
 }
@@ -78,6 +81,9 @@ impl TokenKind {
             LessThan => "`<`",
             LessThanEqual => "`<=`",
             Plus => "`+`",
+            Minus => "`-`",
+            Star => "`*`",
+            Slash => "`/`",
             Dot => "`.`",
             Unknown => "unknown token",
         }
@@ -278,6 +284,8 @@ pub fn lex(file_id: FileId, source: &str) -> (Vec<Token>, Vec<LexError>) {
             b',' => tokens.push(Token::new(TokenKind::Comma, Span::new(file_id, idx, 1))),
             b':' => tokens.push(Token::new(TokenKind::Colon, Span::new(file_id, idx, 1))),
             b'+' => tokens.push(Token::new(TokenKind::Plus, Span::new(file_id, idx, 1))),
+            b'*' => tokens.push(Token::new(TokenKind::Star, Span::new(file_id, idx, 1))),
+            b'/' => tokens.push(Token::new(TokenKind::Slash, Span::new(file_id, idx, 1))),
             b'=' => {
                 let token = match source.get(idx + 1) {
                     Some(b'=') => {
@@ -309,16 +317,16 @@ pub fn lex(file_id: FileId, source: &str) -> (Vec<Token>, Vec<LexError>) {
                 tokens.push(token);
             }
             b'.' => tokens.push(Token::new(TokenKind::Dot, Span::new(file_id, idx, 1))),
-            b'-' => match source.get(idx + 1) {
-                Some(b'>') => {
-                    tokens.push(Token::new(
-                        TokenKind::RightArrow,
-                        Span::new(file_id, idx, 2),
-                    ));
-                    idx += 1;
-                }
-                _ => unknown_char('-'),
-            },
+            b'-' => {
+                let token = match source.get(idx + 1) {
+                    Some(b'>') => {
+                        idx += 1;
+                        Token::new(TokenKind::RightArrow, Span::new(file_id, idx - 1, 2))
+                    }
+                    _ => Token::new(TokenKind::Minus, Span::new(file_id, idx, 1)),
+                };
+                tokens.push(token);
+            }
             e => unknown_char(e as char),
         }
 

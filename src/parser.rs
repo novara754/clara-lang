@@ -107,6 +107,9 @@ pub enum CompareOperation {
 #[derive(Debug, Clone, Copy)]
 pub enum MathOperation {
     Addition,
+    Subtraction,
+    Multiplication,
+    Division,
 }
 
 #[derive(Debug, Clone)]
@@ -818,6 +821,107 @@ fn parse_expression(
     idx: &mut usize,
     restriction: Restriction,
 ) -> Option<(ParsedExpression, Vec<ParseError>)> {
+    let (expr, mut errors) = parse_math(tokens, idx, restriction)?;
+    let expr = if let Some(
+        tok @ Token {
+            kind:
+                TokenKind::EqualEqual
+                | TokenKind::GreaterThan
+                | TokenKind::GreaterThanEqual
+                | TokenKind::LessThan
+                | TokenKind::LessThanEqual,
+            ..
+        },
+    ) = tokens.get(*idx)
+    {
+        *idx += 1; // Consume oeprator token
+
+        let op = match tok.kind {
+            TokenKind::EqualEqual => CompareOperation::Equality,
+            TokenKind::GreaterThan => CompareOperation::GreaterThan,
+            TokenKind::GreaterThanEqual => CompareOperation::GreaterThanEqual,
+            TokenKind::LessThan => CompareOperation::LessThan,
+            TokenKind::LessThanEqual => CompareOperation::LessThanEqual,
+            _ => unreachable!(),
+        };
+
+        let (rhs, mut errs) = parse_expression(tokens, idx, restriction)?;
+        errors.append(&mut errs);
+
+        ParsedExpression::CompareOp(Box::new(expr), Box::new(rhs), op)
+    } else {
+        expr
+    };
+    Some((expr, errors))
+}
+
+fn parse_math(
+    tokens: &[Token],
+    idx: &mut usize,
+    restriction: Restriction,
+) -> Option<(ParsedExpression, Vec<ParseError>)> {
+    let (expr, mut errors) = parse_factor(tokens, idx, restriction)?;
+    let expr = if let Some(
+        tok @ Token {
+            kind: TokenKind::Plus | TokenKind::Minus,
+            ..
+        },
+    ) = tokens.get(*idx)
+    {
+        *idx += 1; // Consume oeprator token
+
+        let op = match tok.kind {
+            TokenKind::Plus => MathOperation::Addition,
+            TokenKind::Minus => MathOperation::Subtraction,
+            _ => unreachable!(),
+        };
+
+        let (rhs, mut errs) = parse_math(tokens, idx, restriction)?;
+        errors.append(&mut errs);
+
+        ParsedExpression::MathOp(Box::new(expr), Box::new(rhs), op)
+    } else {
+        expr
+    };
+    Some((expr, errors))
+}
+
+fn parse_factor(
+    tokens: &[Token],
+    idx: &mut usize,
+    restriction: Restriction,
+) -> Option<(ParsedExpression, Vec<ParseError>)> {
+    let (expr, mut errors) = parse_term(tokens, idx, restriction)?;
+    let expr = if let Some(
+        tok @ Token {
+            kind: TokenKind::Star | TokenKind::Slash,
+            ..
+        },
+    ) = tokens.get(*idx)
+    {
+        *idx += 1; // Consume oeprator token
+
+        let op = match tok.kind {
+            TokenKind::Star => MathOperation::Multiplication,
+            TokenKind::Slash => MathOperation::Division,
+            _ => unreachable!(),
+        };
+
+        let (rhs, mut errs) = parse_factor(tokens, idx, restriction)?;
+        errors.append(&mut errs);
+
+        ParsedExpression::MathOp(Box::new(expr), Box::new(rhs), op)
+    } else {
+        expr
+    };
+    Some((expr, errors))
+}
+
+fn parse_term(
+    tokens: &[Token],
+    idx: &mut usize,
+    restriction: Restriction,
+) -> Option<(ParsedExpression, Vec<ParseError>)> {
     let mut errors = vec![];
     let (expr, mut errors) = loop {
         break match tokens.get(*idx)? {
@@ -925,59 +1029,6 @@ fn parse_expression(
             field_name_span,
             span,
         })
-    } else {
-        expr
-    };
-
-    let expr = if let Some(
-        tok @ Token {
-            kind: TokenKind::Plus,
-            ..
-        },
-    ) = tokens.get(*idx)
-    {
-        *idx += 1; // Consume oeprator token
-
-        let op = match tok.kind {
-            TokenKind::Plus => MathOperation::Addition,
-            _ => unreachable!(),
-        };
-
-        let (rhs, mut errs) = parse_expression(tokens, idx, restriction)?;
-        errors.append(&mut errs);
-
-        ParsedExpression::MathOp(Box::new(expr), Box::new(rhs), op)
-    } else {
-        expr
-    };
-
-    let expr = if let Some(
-        tok @ Token {
-            kind:
-                TokenKind::EqualEqual
-                | TokenKind::GreaterThan
-                | TokenKind::GreaterThanEqual
-                | TokenKind::LessThan
-                | TokenKind::LessThanEqual,
-            ..
-        },
-    ) = tokens.get(*idx)
-    {
-        *idx += 1; // Consume oeprator token
-
-        let op = match tok.kind {
-            TokenKind::EqualEqual => CompareOperation::Equality,
-            TokenKind::GreaterThan => CompareOperation::GreaterThan,
-            TokenKind::GreaterThanEqual => CompareOperation::GreaterThanEqual,
-            TokenKind::LessThan => CompareOperation::LessThan,
-            TokenKind::LessThanEqual => CompareOperation::LessThanEqual,
-            _ => unreachable!(),
-        };
-
-        let (rhs, mut errs) = parse_expression(tokens, idx, restriction)?;
-        errors.append(&mut errs);
-
-        ParsedExpression::CompareOp(Box::new(expr), Box::new(rhs), op)
     } else {
         expr
     };

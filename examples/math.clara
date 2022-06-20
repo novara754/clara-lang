@@ -1,0 +1,21 @@
+extern fn print_int(n: int);
+extern fn print_ln();
+
+fn main() {
+  let a = 2 + 10 / 2;
+  let x = 1 + 2;
+  let y = x * 5;
+  let z = y / 2;
+
+  print_int(a);
+  print_ln();
+
+  print_int(x);
+  print_ln();
+
+  print_int(y);
+  print_ln();
+
+  print_int(z);
+  print_ln();
+}
