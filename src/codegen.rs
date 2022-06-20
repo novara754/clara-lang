@@ -280,13 +280,6 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
         }
         CheckedStatement::LetAssign(variable_name, value_expr) => {
             let var_type = type_to_llvm(ctx, &value_expr.ttype())?;
-            println!(
-                "{}",
-                CString::from_raw(llvm::core::LLVMPrintTypeToString(var_type))
-                    .into_string()
-                    .unwrap()
-            );
-
             let var = llvm::core::LLVMBuildAlloca(ctx.builder, var_type, c_str!(b""));
             let _ = emit_expression(ctx, value_expr, Some(var))?;
             ctx.scope_stack.add_variable(variable_name.clone(), var);
@@ -607,6 +600,15 @@ unsafe fn emit_expression(
             match op {
                 MathOperation::Addition => {
                     llvm::core::LLVMBuildAdd(ctx.builder, lhs, rhs, c_str!(b""))
+                }
+                MathOperation::Subtraction => {
+                    llvm::core::LLVMBuildSub(ctx.builder, lhs, rhs, c_str!(b""))
+                }
+                MathOperation::Multiplication => {
+                    llvm::core::LLVMBuildMul(ctx.builder, lhs, rhs, c_str!(b""))
+                }
+                MathOperation::Division => {
+                    llvm::core::LLVMBuildSDiv(ctx.builder, lhs, rhs, c_str!(b""))
                 }
             }
         }
