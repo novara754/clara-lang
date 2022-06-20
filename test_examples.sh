@@ -1,4 +1,6 @@
 #! /bin/bash
+mkdir -p ./build
+
 cargo build
 
 TESTS_RUN=0
