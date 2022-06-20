@@ -2,6 +2,9 @@
 mkdir -p ./build
 
 cargo build
+if [ $? -eq 1 ]; then
+  exit 1
+fi
 
 TESTS_RUN=0
 TESTS_SUCCESSFUL=0
