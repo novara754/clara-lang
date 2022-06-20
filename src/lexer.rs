@@ -159,7 +159,7 @@ pub fn lex(file_id: FileId, source: &str) -> (Vec<Token>, Vec<LexError>) {
             break;
         }
 
-        if source[idx] == b'/' && source.get(idx) == Some(&b'/') {
+        if source[idx] == b'/' && source.get(idx + 1) == Some(&b'/') {
             while idx < source.len() && source[idx] != b'\n' {
                 idx += 1;
             }
