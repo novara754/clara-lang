@@ -834,7 +834,7 @@ fn parse_expression(
         },
     ) = tokens.get(*idx)
     {
-        *idx += 1; // Consume oeprator token
+        *idx += 1; // Consume operator token
 
         let op = match tok.kind {
             TokenKind::EqualEqual => CompareOperation::Equality,
@@ -868,7 +868,7 @@ fn parse_math(
         },
     ) = tokens.get(*idx)
     {
-        *idx += 1; // Consume oeprator token
+        *idx += 1; // Consume operator token
 
         let op = match tok.kind {
             TokenKind::Plus => MathOperation::Addition,
@@ -899,7 +899,7 @@ fn parse_factor(
         },
     ) = tokens.get(*idx)
     {
-        *idx += 1; // Consume oeprator token
+        *idx += 1; // Consume operator token
 
         let op = match tok.kind {
             TokenKind::Star => MathOperation::Multiplication,
