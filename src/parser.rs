@@ -133,6 +133,7 @@ pub enum ParsedExpression {
     ),
     MathOp(Box<ParsedExpression>, Box<ParsedExpression>, MathOperation),
     FieldAccess(ParsedFieldAccess),
+    Assignment(Box<ParsedExpression>, Box<ParsedExpression>),
 }
 
 impl Spanned for ParsedExpression {
@@ -150,6 +151,7 @@ impl Spanned for ParsedExpression {
             Self::CompareOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
             Self::MathOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
             ParsedExpression::FieldAccess(field_access) => field_access.span,
+            Self::Assignment(lhs, rhs) => lhs.span().to(rhs.span()),
         }
     }
 }
@@ -181,6 +183,7 @@ pub struct ParsedLetAssign {
     pub name: String,
     pub name_span: Span,
     pub value: ParsedExpression,
+    pub is_mut: bool,
 }
 
 #[derive(Debug)]
@@ -635,6 +638,17 @@ fn parse_statement(
 
             *idx += 1; // Consume `let` token
 
+            let is_mut = if let Token {
+                kind: TokenKind::Mut,
+                ..
+            } = tokens.get(*idx)?
+            {
+                *idx += 1; // Consume `mut` token
+                true
+            } else {
+                false
+            };
+
             let (name, name_span) = if let tok @ &Token {
                 kind: TokenKind::Ident(ref name),
                 ..
@@ -657,6 +671,7 @@ fn parse_statement(
                     name,
                     name_span,
                     value,
+                    is_mut,
                 }),
                 errors,
                 true,
@@ -821,7 +836,7 @@ fn parse_expression(
     idx: &mut usize,
     restriction: Restriction,
 ) -> Option<(ParsedExpression, Vec<ParseError>)> {
-    let (expr, mut errors) = parse_math(tokens, idx, restriction)?;
+    let (expr, mut errors) = parse_assignment(tokens, idx, restriction)?;
     let expr = if let Some(
         tok @ Token {
             kind:
@@ -849,6 +864,29 @@ fn parse_expression(
         errors.append(&mut errs);
 
         ParsedExpression::CompareOp(Box::new(expr), Box::new(rhs), op)
+    } else {
+        expr
+    };
+    Some((expr, errors))
+}
+
+fn parse_assignment(
+    tokens: &[Token],
+    idx: &mut usize,
+    restriction: Restriction,
+) -> Option<(ParsedExpression, Vec<ParseError>)> {
+    let (expr, mut errors) = parse_math(tokens, idx, restriction)?;
+    let expr = if let Some(Token {
+        kind: TokenKind::Equal,
+        ..
+    }) = tokens.get(*idx)
+    {
+        *idx += 1; // Consume operator token
+
+        let (rhs, mut errs) = parse_math(tokens, idx, restriction)?;
+        errors.append(&mut errs);
+
+        ParsedExpression::Assignment(Box::new(expr), Box::new(rhs))
     } else {
         expr
     };

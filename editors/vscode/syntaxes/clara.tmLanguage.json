@@ -24,7 +24,7 @@
       "patterns": [
         {
           "name": "keyword.clara",
-          "match": "\\b(extern|fn|opaque|struct|let|return|in)\\b"
+          "match": "\\b(extern|fn|opaque|struct|let|return|in|mut)\\b"
         },
         {
           "name": "keyword.control.clara",

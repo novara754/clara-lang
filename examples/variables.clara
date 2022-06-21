@@ -1,0 +1,12 @@
+extern fn print_int(n: int);
+extern fn print_ln();
+
+fn main() {
+  let x = 123;
+  // x = 321; // should error
+  let mut y = x;
+  y = x * 2;
+
+  print_int(y);
+  print_ln();
+}

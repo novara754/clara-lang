@@ -94,6 +94,9 @@ pub enum TypeCheckError {
     DuplicateFuncStructName(String, Span),
     WrongElementTypeInArray(Type, Type, Span),
     InvalidIterableInForIn(Type, Span),
+    AssignmentTypeMismatch(Type, Type, Span, Span),
+    AssignmentToNonLValue(Span),
+    AssignmentToImmutable(Span),
 }
 
 impl TypeCheckError {
@@ -269,6 +272,22 @@ impl TypeCheckError {
                 .with_notes(vec![format!(
                     "For-in loops currently only support arrays as iterables"
                 )]),
+            Self::AssignmentTypeMismatch(ref actual, ref expected, lhs_span, rhs_span) => {
+                Diagnostic::error()
+                    .with_message("wrong type in assignment")
+                    .with_labels(vec![
+                        Label::primary(lhs_span.source.0, lhs_span)
+                            .with_message(format!("lhs has type {}", expected.to_str())),
+                        Label::secondary(rhs_span.source.0, rhs_span)
+                            .with_message(format!("rhs has type {}", actual.to_str())),
+                    ])
+            }
+            Self::AssignmentToNonLValue(span) => Diagnostic::error()
+                .with_message("lhs of assignment is not an l-value")
+                .with_labels(vec![Label::primary(span.source.0, span)]),
+            Self::AssignmentToImmutable(span) => Diagnostic::error()
+                .with_message("lhs of assignment is not mutable")
+                .with_labels(vec![Label::primary(span.source.0, span)]),
         }
     }
 }
@@ -422,6 +441,20 @@ impl TypeCheckError {
                     ),
                 "span": span.json(),
             }),
+            Self::AssignmentTypeMismatch(ref _actual, ref _expected, _lhs_span, rhs_span) => {
+                json!({
+                    "message": "type mismatch in assignment",
+                    "json": rhs_span.json(),
+                })
+            }
+            Self::AssignmentToNonLValue(span) => json!({
+                "message": "lhs of assignment is not an l-value",
+                "span": span.json(),
+            }),
+            Self::AssignmentToImmutable(span) => json!({
+                "message": "lhs of assignment is not mutable",
+                "span": span.json(),
+            }),
         }
     }
 }
@@ -464,7 +497,7 @@ pub struct CheckedFieldAccess {
 pub enum CheckedExpression {
     Literal(CheckedLiteral),
     FunctionCall(CheckedFunctionCall),
-    Variable(String, Type),
+    Variable(String, Type, bool),
     CompareOp(
         Box<CheckedExpression>,
         Box<CheckedExpression>,
@@ -478,6 +511,7 @@ pub enum CheckedExpression {
         Type,
     ),
     FieldAccess(CheckedFieldAccess, Struct, Type),
+    Assignment(Box<CheckedExpression>, Box<CheckedExpression>),
 }
 
 impl CheckedExpression {
@@ -492,10 +526,11 @@ impl CheckedExpression {
             }
             .clone(),
             Self::FunctionCall(func_call) => func_call.ttype.clone(),
-            Self::Variable(_name, ttype) => ttype.clone(),
+            Self::Variable(_name, ttype, _is_mut) => ttype.clone(),
             Self::CompareOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
             Self::MathOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
             Self::FieldAccess(_field_access, _struct, ttype) => ttype.clone(),
+            Self::Assignment(_lhs, _rhs) => Type::Unit,
         }
     }
 }
@@ -583,9 +618,15 @@ struct Function {
     return_type: Type,
 }
 
+#[derive(Debug)]
+struct KnownVariable {
+    ttype: Type,
+    is_mut: bool,
+}
+
 #[derive(Debug, Default)]
 struct ScopeStack {
-    stack: Vec<(Option<String>, HashMap<String, Type>)>,
+    stack: Vec<(Option<String>, HashMap<String, KnownVariable>)>,
 }
 
 impl ScopeStack {
@@ -597,7 +638,7 @@ impl ScopeStack {
         self.stack.pop();
     }
 
-    fn add_variable(&mut self, variable_name: &str, ttype: Type) -> bool {
+    fn add_variable(&mut self, variable_name: &str, ttype: Type, is_mut: bool) -> bool {
         let entry = self
             .stack
             .last_mut()
@@ -608,16 +649,16 @@ impl ScopeStack {
         match entry {
             Entry::Occupied(_) => true,
             _ => {
-                entry.or_insert(ttype);
+                entry.or_insert(KnownVariable { ttype, is_mut });
                 false
             }
         }
     }
 
-    fn get_variable_type(&self, variable_name: &str) -> Option<&Type> {
+    fn get_variable_type(&self, variable_name: &str) -> Option<&KnownVariable> {
         for scope in self.stack.iter().rev() {
-            if let Some(ttype) = scope.1.get(variable_name) {
-                return Some(ttype);
+            if let Some(var) = scope.1.get(variable_name) {
+                return Some(var);
             }
         }
         None
@@ -816,7 +857,7 @@ pub fn typecheck_program(program: &ParsedProgram) -> (CheckedProgram, Vec<TypeCh
             for param in &func.parameters {
                 context
                     .scope_stack
-                    .add_variable(&param.name, param.ttype.clone());
+                    .add_variable(&param.name, param.ttype.clone(), false);
             }
 
             let (body, mut errs) = typecheck_block(&mut context, &func.body);
@@ -876,10 +917,11 @@ fn typecheck_statement(
         }
         ParsedStatement::LetAssign(let_assign) => {
             let (checked_value, mut errors) = typecheck_expression(context, &let_assign.value);
-            if context
-                .scope_stack
-                .add_variable(&let_assign.name, checked_value.ttype())
-            {
+            if context.scope_stack.add_variable(
+                &let_assign.name,
+                checked_value.ttype(),
+                let_assign.is_mut,
+            ) {
                 errors.push(TypeCheckError::DuplicateVariableName(
                     let_assign.name.clone(),
                     let_assign.name_span,
@@ -969,7 +1011,7 @@ fn typecheck_statement(
 
             if context
                 .scope_stack
-                .add_variable(&for_in.elem_var_name, elem_type.clone())
+                .add_variable(&for_in.elem_var_name, elem_type.clone(), false)
             {
                 errors.push(TypeCheckError::DuplicateVariableName(
                     for_in.elem_var_name.clone(),
@@ -978,7 +1020,10 @@ fn typecheck_statement(
             }
 
             if let Some((ref index_var_name, index_var_name_span)) = for_in.index_var {
-                if context.scope_stack.add_variable(index_var_name, Type::Int) {
+                if context
+                    .scope_stack
+                    .add_variable(index_var_name, Type::Int, false)
+                {
                     errors.push(TypeCheckError::DuplicateVariableName(
                         for_in.elem_var_name.clone(),
                         index_var_name_span,
@@ -1222,14 +1267,16 @@ fn typecheck_expression(
             )
         }
         ParsedExpression::Variable(variable_name, span) => {
-            if let Some(ttype) = context.scope_stack.get_variable_type(variable_name) {
+            if let Some(KnownVariable { ttype, is_mut }) =
+                context.scope_stack.get_variable_type(variable_name)
+            {
                 (
-                    CheckedExpression::Variable(variable_name.clone(), ttype.clone()),
+                    CheckedExpression::Variable(variable_name.clone(), ttype.clone(), *is_mut),
                     vec![],
                 )
             } else {
                 (
-                    CheckedExpression::Variable(variable_name.clone(), Type::Incomplete),
+                    CheckedExpression::Variable(variable_name.clone(), Type::Incomplete, false),
                     vec![TypeCheckError::UnknownVariable(
                         variable_name.clone(),
                         context
@@ -1340,6 +1387,32 @@ fn typecheck_expression(
                     r#struct,
                     ttype,
                 ),
+                errors,
+            )
+        }
+        ParsedExpression::Assignment(lhs, rhs) => {
+            let (checked_lhs, mut errors) = typecheck_expression(context, lhs);
+            let (checked_rhs, mut errs) = typecheck_expression(context, rhs);
+            errors.append(&mut errs);
+
+            if let CheckedExpression::Variable(_name, ttype, is_mut) = &checked_lhs {
+                if !is_mut {
+                    errors.push(TypeCheckError::AssignmentToImmutable(lhs.span()))
+                }
+                if !checked_rhs.ttype().matches(ttype) {
+                    errors.push(TypeCheckError::AssignmentTypeMismatch(
+                        checked_rhs.ttype(),
+                        ttype.clone(),
+                        lhs.span(),
+                        rhs.span(),
+                    ));
+                }
+            } else {
+                errors.push(TypeCheckError::AssignmentToNonLValue(lhs.span()));
+            }
+
+            (
+                CheckedExpression::Assignment(Box::new(checked_lhs), Box::new(checked_rhs)),
                 errors,
             )
         }

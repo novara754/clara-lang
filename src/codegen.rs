@@ -610,7 +610,7 @@ unsafe fn emit_expression(
                 }
             }
         }
-        CheckedExpression::Variable(variable_name, _type) => llvm::core::LLVMBuildLoad(
+        CheckedExpression::Variable(variable_name, _type, _is_mut) => llvm::core::LLVMBuildLoad(
             ctx.builder,
             ctx.scope_stack.get_variable(variable_name),
             c_str!(b""),
@@ -639,6 +639,17 @@ unsafe fn emit_expression(
             );
 
             llvm::core::LLVMBuildLoad(ctx.builder, field_ptr, c_str!(b""))
+        }
+        CheckedExpression::Assignment(lhs, rhs) => {
+            let variable_name = if let CheckedExpression::Variable(name, _type, _is_mut) =
+                lhs.as_ref()
+            {
+                name
+            } else {
+                panic!("codegen::emit_expression: attempted to assign to non-variable. typechecker should not have let this happen.")
+            };
+            let variable = ctx.scope_stack.get_variable(variable_name);
+            emit_expression(ctx, rhs, Some(variable))?
         }
     };
 
