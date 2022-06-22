@@ -69,6 +69,12 @@ struct EmitContext {
     scope_stack: ScopeStack,
 }
 
+#[derive(Debug)]
+enum ExprEmitAs {
+    LValue,
+    RValue,
+}
+
 pub fn generate_executable<P>(
     _o_filepath: P,
     program: &CheckedProgram,
@@ -276,12 +282,13 @@ unsafe fn emit_block(
 unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) -> eyre::Result<()> {
     match statement {
         CheckedStatement::Expression(expr) => {
-            emit_expression(ctx, expr, None)?;
+            emit_expression(ctx, expr, ExprEmitAs::RValue)?;
         }
         CheckedStatement::LetAssign(variable_name, value_expr) => {
             let var_type = type_to_llvm(ctx, &value_expr.ttype())?;
             let var = llvm::core::LLVMBuildAlloca(ctx.builder, var_type, c_str!(b""));
-            let _ = emit_expression(ctx, value_expr, Some(var))?;
+            let value = emit_expression(ctx, value_expr, ExprEmitAs::RValue)?;
+            llvm::core::LLVMBuildStore(ctx.builder, value, var);
             ctx.scope_stack.add_variable(variable_name.clone(), var);
         }
         CheckedStatement::IfElse(if_else) => {
@@ -301,7 +308,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
                 c_str!(b"after_if_else"),
             );
 
-            let condition = emit_expression(ctx, &if_else.condition, None)?;
+            let condition = emit_expression(ctx, &if_else.condition, ExprEmitAs::RValue)?;
             llvm::core::LLVMBuildCondBr(ctx.builder, condition, if_block, else_block);
 
             emit_block(ctx, &if_else.if_body, if_block)?;
@@ -332,7 +339,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
             llvm::core::LLVMBuildBr(ctx.builder, condition_block);
 
             llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, condition_block);
-            let condition = emit_expression(ctx, &while_loop.condition, None)?;
+            let condition = emit_expression(ctx, &while_loop.condition, ExprEmitAs::RValue)?;
             llvm::core::LLVMBuildCondBr(ctx.builder, condition, loop_block, after_loop_block);
 
             llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, loop_block);
@@ -367,18 +374,16 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
                 index_var_storage,
             );
 
-            let iterable_storage = llvm::core::LLVMBuildAlloca(
-                ctx.builder,
-                type_to_llvm(ctx, &for_in.iterable.ttype())?,
-                c_str!(b"iterable"),
-            );
+            let iterable = emit_expression(ctx, &for_in.iterable, ExprEmitAs::LValue)?;
             let iterable_elem_ptr = llvm::core::LLVMBuildBitCast(
                 ctx.builder,
-                iterable_storage,
-                type_to_llvm(ctx, &Type::Pointer(Box::new(for_in.elem_var_type.clone())))?,
+                iterable,
+                type_to_llvm(
+                    ctx,
+                    &Type::Pointer(Box::new(for_in.elem_var_type.clone()), false),
+                )?,
                 c_str!(b"iterable_ptr"),
             );
-            let _ = emit_expression(ctx, &for_in.iterable, Some(iterable_storage));
 
             let condition_block = llvm::core::LLVMAppendBasicBlockInContext(
                 ctx.context,
@@ -443,7 +448,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
             llvm::core::LLVMPositionBuilderAtEnd(ctx.builder, after_loop_block);
         }
         CheckedStatement::Return(return_value) => {
-            let return_value = emit_expression(ctx, return_value, None)?;
+            let return_value = emit_expression(ctx, return_value, ExprEmitAs::RValue)?;
             llvm::core::LLVMBuildRet(ctx.builder, return_value);
 
             let unreachable_block = llvm::core::LLVMAppendBasicBlockInContext(
@@ -461,7 +466,7 @@ unsafe fn emit_statement(ctx: &mut EmitContext, statement: &CheckedStatement) ->
 unsafe fn emit_expression(
     ctx: &mut EmitContext,
     expression: &CheckedExpression,
-    mut storage: Option<*mut LLVMValue>,
+    emit_as: ExprEmitAs,
 ) -> eyre::Result<LLVMValueRef> {
     let value_ref = match expression {
         CheckedExpression::Literal(literal) => match literal {
@@ -510,27 +515,17 @@ unsafe fn emit_expression(
                             .fields
                             .get(declared_field_name.as_str())
                             .expect("existence of field value was established by typechecker");
-                        emit_expression(ctx, field_value, None)
+                        emit_expression(ctx, field_value, ExprEmitAs::RValue)
                     })
                     .collect::<eyre::Result<_>>()?;
 
-                let r#struct = llvm::core::LLVMConstNamedStruct(
+                llvm::core::LLVMConstNamedStruct(
                     struct_type_ref,
                     field_values.as_mut_ptr(),
                     field_values.len().try_into()?,
-                );
-
-                if storage.is_none() {
-                    storage = Some(llvm::core::LLVMBuildAlloca(
-                        ctx.builder,
-                        struct_type_ref,
-                        c_str!(b""),
-                    ));
-                }
-
-                r#struct
+                )
             }
-            CheckedLiteral::Array(array_literal, array_type) => {
+            CheckedLiteral::Array(array_literal, _array_type) => {
                 let element_type = array_literal
                     .element_type
                     .as_ref()
@@ -539,24 +534,14 @@ unsafe fn emit_expression(
                 let mut elements: Vec<_> = array_literal
                     .elements
                     .iter()
-                    .map(|elem| emit_expression(ctx, elem, None))
+                    .map(|elem| emit_expression(ctx, elem, ExprEmitAs::RValue))
                     .collect::<eyre::Result<_>>()?;
 
-                let array = llvm::core::LLVMConstArray(
+                llvm::core::LLVMConstArray(
                     type_to_llvm(ctx, element_type)?,
                     elements.as_mut_ptr(),
                     elements.len().try_into()?,
-                );
-
-                if storage.is_none() {
-                    storage = Some(llvm::core::LLVMBuildAlloca(
-                        ctx.builder,
-                        type_to_llvm(ctx, array_type)?,
-                        c_str!(b""),
-                    ));
-                }
-
-                array
+                )
             }
         },
         CheckedExpression::FunctionCall(func_call) => {
@@ -564,7 +549,7 @@ unsafe fn emit_expression(
             let mut args: Vec<LLVMValueRef> = func_call
                 .args
                 .iter()
-                .map(|expr| emit_expression(ctx, expr, None))
+                .map(|expr| emit_expression(ctx, expr, ExprEmitAs::RValue))
                 .collect::<eyre::Result<_>>()?;
             llvm::core::LLVMBuildCall2(
                 ctx.builder,
@@ -576,8 +561,8 @@ unsafe fn emit_expression(
             )
         }
         CheckedExpression::CompareOp(lhs, rhs, op, _type) => {
-            let lhs = emit_expression(ctx, lhs, None)?;
-            let rhs = emit_expression(ctx, rhs, None)?;
+            let lhs = emit_expression(ctx, lhs, ExprEmitAs::RValue)?;
+            let rhs = emit_expression(ctx, rhs, ExprEmitAs::RValue)?;
             let predicate = match op {
                 CompareOperation::GreaterThan => LLVMIntPredicate::LLVMIntSGT,
                 CompareOperation::Equality => LLVMIntPredicate::LLVMIntEQ,
@@ -593,8 +578,8 @@ unsafe fn emit_expression(
                 "Codegen for MathOp for non-ints not implemented"
             );
 
-            let lhs = emit_expression(ctx, lhs, None)?;
-            let rhs = emit_expression(ctx, rhs, None)?;
+            let lhs = emit_expression(ctx, lhs, ExprEmitAs::RValue)?;
+            let rhs = emit_expression(ctx, rhs, ExprEmitAs::RValue)?;
             match op {
                 MathOperation::Addition => {
                     llvm::core::LLVMBuildAdd(ctx.builder, lhs, rhs, c_str!(b""))
@@ -610,11 +595,13 @@ unsafe fn emit_expression(
                 }
             }
         }
-        CheckedExpression::Variable(variable_name, _type, _is_mut) => llvm::core::LLVMBuildLoad(
-            ctx.builder,
-            ctx.scope_stack.get_variable(variable_name),
-            c_str!(b""),
-        ),
+        CheckedExpression::Variable(variable_name, _type, _is_mut) => {
+            let var_ref = ctx.scope_stack.get_variable(variable_name);
+            match emit_as {
+                ExprEmitAs::RValue => llvm::core::LLVMBuildLoad(ctx.builder, var_ref, c_str!(b"")),
+                ExprEmitAs::LValue => return Ok(var_ref),
+            }
+        }
         CheckedExpression::FieldAccess(field_access, r#struct, _struct_type) => {
             // let struct_type_ref = type_to_llvm(ctx, struct_type);
             let field_index = r#struct
@@ -627,8 +614,8 @@ unsafe fn emit_expression(
 
             let object_type = type_to_llvm(ctx, &field_access.object.ttype())?;
             let object_storage = llvm::core::LLVMBuildAlloca(ctx.builder, object_type, c_str!(b""));
-
-            let _ = emit_expression(ctx, &field_access.object, Some(object_storage))?;
+            let object = emit_expression(ctx, &field_access.object, ExprEmitAs::RValue)?;
+            llvm::core::LLVMBuildStore(ctx.builder, object, object_storage);
 
             let field_ptr = llvm::core::LLVMBuildStructGEP(
                 ctx.builder,
@@ -641,28 +628,29 @@ unsafe fn emit_expression(
             llvm::core::LLVMBuildLoad(ctx.builder, field_ptr, c_str!(b""))
         }
         CheckedExpression::Assignment(lhs, rhs) => {
-            let variable_name = if let CheckedExpression::Variable(name, _type, _is_mut) =
-                lhs.as_ref()
-            {
-                name
-            } else {
-                panic!("codegen::emit_expression: attempted to assign to non-variable. typechecker should not have let this happen.")
-            };
-            let variable = ctx.scope_stack.get_variable(variable_name);
-            emit_expression(ctx, rhs, Some(variable))?
+            let destination = emit_expression(ctx, lhs, ExprEmitAs::LValue)?;
+            let value = emit_expression(ctx, rhs, ExprEmitAs::RValue)?;
+            llvm::core::LLVMBuildStore(ctx.builder, value, destination);
+            value
+        }
+        CheckedExpression::PointerTo(pointer_to) => {
+            emit_expression(ctx, &pointer_to.inner, ExprEmitAs::LValue)?
+        }
+        CheckedExpression::Deref(deref) => {
+            let pointer = emit_expression(ctx, &deref.inner, ExprEmitAs::RValue)?;
+            match emit_as {
+                ExprEmitAs::LValue => pointer,
+                ExprEmitAs::RValue => llvm::core::LLVMBuildLoad(ctx.builder, pointer, c_str!(b"")),
+            }
         }
     };
-
-    if let Some(storage) = storage {
-        llvm::core::LLVMBuildStore(ctx.builder, value_ref, storage);
-    }
 
     Ok(value_ref)
 }
 
 unsafe fn type_to_llvm(ctx: &mut EmitContext, ttype: &Type) -> eyre::Result<*mut LLVMType> {
     Ok(match ttype {
-        Type::Pointer(subtype) => {
+        Type::Pointer(subtype, _is_mut) => {
             let subtype = type_to_llvm(ctx, subtype)?;
             llvm::core::LLVMPointerType(subtype, 0)
         }

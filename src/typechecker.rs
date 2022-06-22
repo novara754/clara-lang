@@ -14,7 +14,7 @@ use crate::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     UserDefined(String),
-    Pointer(Box<Type>),
+    Pointer(Box<Type>, bool),
     GenericInt,
     String,
     Int,
@@ -28,6 +28,24 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn element_type(&self) -> Option<Type> {
+        match self {
+            Type::Pointer(box elem_type, _) => Some(elem_type.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn is_mut_pointer(&self) -> bool {
+        match self {
+            Type::Pointer(_, is_mut) => *is_mut,
+            _ => false,
+        }
+    }
+
+    pub fn is_pointer(&self) -> bool {
+        matches!(self, Type::Pointer(_, _))
+    }
+
     pub fn is_integer_type(&self) -> bool {
         matches!(self, Self::GenericInt | Self::CInt | Self::Int)
     }
@@ -39,6 +57,9 @@ impl Type {
             match (self, other) {
                 (Self::GenericInt, _) => other.is_integer_type(),
                 (_, Self::GenericInt) => self.is_integer_type(),
+                (Self::Pointer(this, this_mut), Self::Pointer(other, other_mut)) => {
+                    this_mut == other_mut && this.matches(other)
+                }
                 _ => false,
             }
         }
@@ -59,7 +80,8 @@ impl Type {
     pub fn to_str(&self) -> String {
         match self {
             Self::GenericInt => "{integer}".to_string(),
-            Self::Pointer(ty) => format!("->{}", ty.to_str()),
+            Self::Pointer(ty, true) => format!("->mut {}", ty.to_str()),
+            Self::Pointer(ty, false) => format!("->{}", ty.to_str()),
             Self::String => "string".to_string(),
             Self::Int => "int".to_string(),
             Self::Bool => "bool".to_string(),
@@ -97,6 +119,8 @@ pub enum TypeCheckError {
     AssignmentTypeMismatch(Type, Type, Span, Span),
     AssignmentToNonLValue(Span),
     AssignmentToImmutable(Span),
+    MutablePointerToImmutableVariable(Span),
+    DerefNonPointer(Type, Span),
 }
 
 impl TypeCheckError {
@@ -288,6 +312,13 @@ impl TypeCheckError {
             Self::AssignmentToImmutable(span) => Diagnostic::error()
                 .with_message("lhs of assignment is not mutable")
                 .with_labels(vec![Label::primary(span.source.0, span)]),
+            Self::MutablePointerToImmutableVariable(span) => Diagnostic::error()
+                .with_message("cannot create mutable pointer to immutable variable")
+                .with_labels(vec![Label::primary(span.source.0, span)]),
+            Self::DerefNonPointer(ref ttype, span) => Diagnostic::error()
+                .with_message("cannot dereference value of non-pointer type")
+                .with_labels(vec![Label::primary(span.source.0, span)
+                    .with_message(format!("value has type `{}`", ttype.to_str()))]),
         }
     }
 }
@@ -455,6 +486,14 @@ impl TypeCheckError {
                 "message": "lhs of assignment is not mutable",
                 "span": span.json(),
             }),
+            Self::MutablePointerToImmutableVariable(span) => json!({
+                "message": "cannot create mutable pointer to immutable variable",
+                "span": span.json(),
+            }),
+            Self::DerefNonPointer(ref _ttype, span) => json!({
+                "message": "cannot dereference value of non-pointer type",
+                "span": span.json(),
+            }),
         }
     }
 }
@@ -494,6 +533,18 @@ pub struct CheckedFieldAccess {
 }
 
 #[derive(Debug)]
+pub struct CheckedPointerTo {
+    pub inner: Box<CheckedExpression>,
+    pub ttype: Type,
+}
+
+#[derive(Debug)]
+pub struct CheckedDeref {
+    pub inner: Box<CheckedExpression>,
+    pub ttype: Type,
+}
+
+#[derive(Debug)]
 pub enum CheckedExpression {
     Literal(CheckedLiteral),
     FunctionCall(CheckedFunctionCall),
@@ -512,6 +563,8 @@ pub enum CheckedExpression {
     ),
     FieldAccess(CheckedFieldAccess, Struct, Type),
     Assignment(Box<CheckedExpression>, Box<CheckedExpression>),
+    PointerTo(CheckedPointerTo),
+    Deref(CheckedDeref),
 }
 
 impl CheckedExpression {
@@ -531,6 +584,10 @@ impl CheckedExpression {
             Self::MathOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
             Self::FieldAccess(_field_access, _struct, ttype) => ttype.clone(),
             Self::Assignment(_lhs, _rhs) => Type::Unit,
+            Self::PointerTo(pointer_to) => pointer_to.ttype.clone(),
+            Self::Deref(deref) => deref.ttype.clone(),
+        }
+    }
         }
     }
 }
@@ -685,7 +742,7 @@ struct Context<'a> {
 impl<'a> Context<'a> {
     fn type_is_defined(&self, ttype: &Type) -> bool {
         match ttype {
-            Type::Pointer(ref subtype) => self.type_is_defined(subtype),
+            Type::Pointer(ref subtype, _is_mut) => self.type_is_defined(subtype),
             Type::UserDefined(ref name) => self.known_structs.contains_key(name),
             _ => true,
         }
@@ -1395,24 +1452,79 @@ fn typecheck_expression(
             let (checked_rhs, mut errs) = typecheck_expression(context, rhs);
             errors.append(&mut errs);
 
-            if let CheckedExpression::Variable(_name, ttype, is_mut) = &checked_lhs {
-                if !is_mut {
-                    errors.push(TypeCheckError::AssignmentToImmutable(lhs.span()))
-                }
-                if !checked_rhs.ttype().matches(ttype) {
-                    errors.push(TypeCheckError::AssignmentTypeMismatch(
-                        checked_rhs.ttype(),
-                        ttype.clone(),
-                        lhs.span(),
-                        rhs.span(),
-                    ));
-                }
-            } else {
+            let (is_l_value, is_mut, target_type) = match &checked_lhs {
+                CheckedExpression::Variable(_name, ttype, is_mut) => (true, *is_mut, ttype.clone()),
+                CheckedExpression::Deref(deref) => (
+                    true,
+                    deref.inner.ttype().is_mut_pointer(),
+                    deref
+                        .inner
+                        .ttype()
+                        .element_type()
+                        .unwrap_or(Type::Incomplete),
+                ),
+                _ => (false, false, Type::Incomplete),
+            };
+
+            if !is_l_value {
                 errors.push(TypeCheckError::AssignmentToNonLValue(lhs.span()));
+            }
+
+            if is_l_value && !is_mut {
+                errors.push(TypeCheckError::AssignmentToImmutable(lhs.span()));
+            }
+
+            if !target_type.matches(&checked_rhs.ttype()) {
+                errors.push(TypeCheckError::AssignmentTypeMismatch(
+                    checked_rhs.ttype(),
+                    target_type,
+                    lhs.span(),
+                    rhs.span(),
+                ));
             }
 
             (
                 CheckedExpression::Assignment(Box::new(checked_lhs), Box::new(checked_rhs)),
+                errors,
+            )
+        }
+        expr @ ParsedExpression::PointerTo(pointer_to) => {
+            let (checked_inner, mut errors) = typecheck_expression(context, &pointer_to.inner);
+
+            if pointer_to.is_mut && !checked_inner.is_mut() {
+                errors.push(TypeCheckError::MutablePointerToImmutableVariable(
+                    expr.span(),
+                ));
+            }
+
+            let ttype = Type::Pointer(Box::new(checked_inner.ttype()), pointer_to.is_mut);
+            (
+                CheckedExpression::PointerTo(CheckedPointerTo {
+                    inner: Box::new(checked_inner),
+                    ttype,
+                }),
+                errors,
+            )
+        }
+        expr @ ParsedExpression::Deref(deref) => {
+            let (checked_inner, mut errors) = typecheck_expression(context, &deref.inner);
+
+            if !checked_inner.ttype().is_pointer() {
+                errors.push(TypeCheckError::DerefNonPointer(
+                    checked_inner.ttype(),
+                    expr.span(),
+                ))
+            }
+
+            let ttype = checked_inner
+                .ttype()
+                .element_type()
+                .unwrap_or(Type::Incomplete);
+            (
+                CheckedExpression::Deref(CheckedDeref {
+                    inner: Box::new(checked_inner),
+                    ttype,
+                }),
                 errors,
             )
         }

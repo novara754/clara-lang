@@ -30,7 +30,7 @@ for FILE in ./examples/*.clara; do
           echo "OK"
         else
           printf "INCORRECT OUTPUT\n"
-          printf "$ACTUAL_STDOUT" | diff - "$EXPECTED_STDOUT_FILE"
+          printf "$ACTUAL_STDOUT\n" | diff - "$EXPECTED_STDOUT_FILE"
         fi
       else
         ((TESTS_SUCCESSFUL += 1))

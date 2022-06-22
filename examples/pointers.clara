@@ -1,0 +1,41 @@
+extern fn print_str(s: ->c_char);
+extern fn print_int(n: int);
+extern fn print_ln();
+
+// struct Person {
+//   age: int,
+// }
+
+// fn birthday(person: ->mut Person) {
+//   inc(->mut person.age);
+// }
+
+fn inc(n: ->mut int) {
+  *n = *n + 1;
+}
+
+fn main() {
+  let x = 123;
+  // inc(->mut x); // should error
+  let mut y = x;
+  print_str("y:");
+  print_ln();
+  print_str("  ");
+  print_int(y);
+  print_str(" -> ");
+  inc(->mut y);
+  print_int(y);
+  print_ln();
+
+  // let mut bob = Person {
+  //   age: 23
+  // };
+  // print_str("bob.age:");
+  // print_ln();
+  // print_str("  ");
+  // print_int(bob.age);
+  // print_str(" -> ");
+  // birthday(->mut bob);
+  // print_int(bob.age);
+  // print_ln();
+}

@@ -122,6 +122,19 @@ pub struct ParsedFieldAccess {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedPointerTo {
+    pub pointer_span: Span,
+    pub inner: Box<ParsedExpression>,
+    pub is_mut: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedDeref {
+    pub star_span: Span,
+    pub inner: Box<ParsedExpression>,
+}
+
+#[derive(Debug, Clone)]
 pub enum ParsedExpression {
     Literal(Literal),
     FunctionCall(ParsedFunctionCall),
@@ -134,6 +147,8 @@ pub enum ParsedExpression {
     MathOp(Box<ParsedExpression>, Box<ParsedExpression>, MathOperation),
     FieldAccess(ParsedFieldAccess),
     Assignment(Box<ParsedExpression>, Box<ParsedExpression>),
+    PointerTo(ParsedPointerTo),
+    Deref(ParsedDeref),
 }
 
 impl Spanned for ParsedExpression {
@@ -152,6 +167,8 @@ impl Spanned for ParsedExpression {
             Self::MathOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
             ParsedExpression::FieldAccess(field_access) => field_access.span,
             Self::Assignment(lhs, rhs) => lhs.span().to(rhs.span()),
+            Self::PointerTo(pointer_to) => pointer_to.pointer_span.to(pointer_to.inner.span()),
+            Self::Deref(deref) => deref.star_span.to(deref.inner.span()),
         }
     }
 }
@@ -552,6 +569,17 @@ fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Span, Vec<Pars
     if is_pointer {
         *idx += 1;
     }
+    let is_mut_pointer = is_pointer
+        && matches!(
+            tokens.get(*idx)?,
+            Token {
+                kind: TokenKind::Mut,
+                ..
+            }
+        );
+    if is_mut_pointer {
+        *idx += 1;
+    }
 
     let (ttype, type_span) = if let tok @ &Token {
         kind: TokenKind::Ident(ref name),
@@ -567,7 +595,7 @@ fn parse_type(tokens: &[Token], idx: &mut usize) -> Option<(Type, Span, Vec<Pars
     };
 
     let ttype = if is_pointer {
-        Type::Pointer(Box::new(ttype))
+        Type::Pointer(Box::new(ttype), is_mut_pointer)
     } else {
         ttype
     };
@@ -960,9 +988,57 @@ fn parse_term(
     idx: &mut usize,
     restriction: Restriction,
 ) -> Option<(ParsedExpression, Vec<ParseError>)> {
+    dbg!(&tokens[*idx..][..5]);
+
     let mut errors = vec![];
     let (expr, mut errors) = loop {
         break match tokens.get(*idx)? {
+            pointer_tok @ Token {
+                kind: TokenKind::RightArrow,
+                ..
+            } => {
+                *idx += 1; // Consume `->` token
+                let mut_span = if let Token {
+                    kind: TokenKind::Mut,
+                    span,
+                } = tokens.get(*idx)?
+                {
+                    *idx += 1; // Consume `mut` token
+                    Some(*span)
+                } else {
+                    None
+                };
+                let (expr, mut errs) = parse_term(tokens, idx, restriction)?;
+                errors.append(&mut errs);
+
+                let pointer_span = if let Some(mut_span) = mut_span {
+                    pointer_tok.span.to(mut_span)
+                } else {
+                    pointer_tok.span
+                };
+                (
+                    ParsedExpression::PointerTo(ParsedPointerTo {
+                        pointer_span,
+                        inner: Box::new(expr),
+                        is_mut: mut_span.is_some(),
+                    }),
+                    errors,
+                )
+            }
+            Token {
+                kind: TokenKind::Star,
+                span: star_span,
+            } => {
+                *idx += 1; // Consume `*` token
+                let (expr, errors) = parse_term(tokens, idx, restriction)?;
+                (
+                    ParsedExpression::Deref(ParsedDeref {
+                        star_span: *star_span,
+                        inner: Box::new(expr),
+                    }),
+                    errors,
+                )
+            }
             tok @ Token {
                 kind: TokenKind::Ident(name),
                 ..
