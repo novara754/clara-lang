@@ -529,7 +529,9 @@ pub enum CheckedLiteral {
 #[derive(Debug)]
 pub struct CheckedFieldAccess {
     pub object: Box<CheckedExpression>,
+    pub object_is_ptr: bool,
     pub field_name: String,
+    pub is_mut: bool,
 }
 
 #[derive(Debug)]
@@ -588,6 +590,12 @@ impl CheckedExpression {
             Self::Deref(deref) => deref.ttype.clone(),
         }
     }
+
+    pub fn is_mut(&self) -> bool {
+        match self {
+            Self::Variable(_, _, is_mut) => *is_mut,
+            Self::FieldAccess(field_acces, _, _) => field_acces.is_mut,
+            _ => true,
         }
     }
 }
@@ -1131,7 +1139,7 @@ fn typecheck_expression(
             Literal::String(value, _) => (
                 CheckedExpression::Literal(CheckedLiteral::String(
                     value.clone(),
-                    Type::Pointer(Box::new(Type::CChar)),
+                    Type::Pointer(Box::new(Type::CChar), false),
                 )),
                 vec![],
             ),
@@ -1399,7 +1407,13 @@ fn typecheck_expression(
         }
         ParsedExpression::FieldAccess(field_access) => {
             let (checked_object, mut errors) = typecheck_expression(context, &field_access.object);
-            let obj_type = checked_object.ttype();
+
+            let (object_is_ptr, obj_type, is_mut) =
+                if let Type::Pointer(ref element_type, is_mut) = checked_object.ttype() {
+                    (true, *element_type.clone(), is_mut)
+                } else {
+                    (false, checked_object.ttype(), checked_object.is_mut())
+                };
 
             let (ttype, r#struct) =
                 if let Some(r#struct) = context.known_structs.get(&obj_type.to_str()) {
@@ -1439,7 +1453,9 @@ fn typecheck_expression(
                 CheckedExpression::FieldAccess(
                     CheckedFieldAccess {
                         object: Box::new(checked_object),
+                        object_is_ptr,
                         field_name: field_access.field_name.clone(),
+                        is_mut,
                     },
                     r#struct,
                     ttype,

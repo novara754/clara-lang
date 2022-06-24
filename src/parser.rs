@@ -988,8 +988,6 @@ fn parse_term(
     idx: &mut usize,
     restriction: Restriction,
 ) -> Option<(ParsedExpression, Vec<ParseError>)> {
-    dbg!(&tokens[*idx..][..5]);
-
     let mut errors = vec![];
     let (expr, mut errors) = loop {
         break match tokens.get(*idx)? {

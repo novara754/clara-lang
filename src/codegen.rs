@@ -612,20 +612,28 @@ unsafe fn emit_expression(
                 })
                 .expect("existence of field in field access was established by typechecker");
 
-            let object_type = type_to_llvm(ctx, &field_access.object.ttype())?;
-            let object_storage = llvm::core::LLVMBuildAlloca(ctx.builder, object_type, c_str!(b""));
-            let object = emit_expression(ctx, &field_access.object, ExprEmitAs::RValue)?;
-            llvm::core::LLVMBuildStore(ctx.builder, object, object_storage);
+            // let object_type = type_to_llvm(ctx, &field_access.object.ttype())?;
+            // let object_storage = llvm::core::LLVMBuildAlloca(ctx.builder, object_type, c_str!(b""));
+            let mut object = emit_expression(ctx, &field_access.object, ExprEmitAs::LValue)?;
+
+            if field_access.object_is_ptr {
+                object = llvm::core::LLVMBuildLoad(ctx.builder, object, c_str!(b""));
+            }
 
             let field_ptr = llvm::core::LLVMBuildStructGEP(
                 ctx.builder,
                 // struct_type_ref,
-                object_storage,
+                object,
                 field_index.try_into()?,
                 c_str!(b""),
             );
 
-            llvm::core::LLVMBuildLoad(ctx.builder, field_ptr, c_str!(b""))
+            match emit_as {
+                ExprEmitAs::RValue => {
+                    llvm::core::LLVMBuildLoad(ctx.builder, field_ptr, c_str!(b""))
+                }
+                ExprEmitAs::LValue => return Ok(field_ptr),
+            }
         }
         CheckedExpression::Assignment(lhs, rhs) => {
             let destination = emit_expression(ctx, lhs, ExprEmitAs::LValue)?;
