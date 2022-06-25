@@ -30,7 +30,7 @@ pub enum Type {
 impl Type {
     pub fn element_type(&self) -> Option<Type> {
         match self {
-            Type::Pointer(box elem_type, _) => Some(elem_type.clone()),
+            Type::Pointer(elem_type, _) => Some(*elem_type.clone()),
             _ => None,
         }
     }
@@ -1062,8 +1062,8 @@ fn typecheck_statement(
                 typecheck_expression(context, &for_in.iterable_value);
             errors.append(&mut errs);
 
-            let elem_type = if let Type::Array(box elem_type, _) = checked_iterable.ttype() {
-                elem_type
+            let elem_type = if let Type::Array(elem_type, _) = checked_iterable.ttype() {
+                *elem_type
             } else {
                 errors.push(TypeCheckError::InvalidIterableInForIn(
                     checked_iterable.ttype(),

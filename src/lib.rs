@@ -1,4 +1,3 @@
-#![feature(box_patterns)]
 #![allow(clippy::collapsible_match)]
 #![feature(concat_bytes)]
 
