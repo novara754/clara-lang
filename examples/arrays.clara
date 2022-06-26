@@ -11,4 +11,11 @@ fn main() {
     print_int(x);
     print_ln();
   }
+
+  print_int(xs[1]);
+  print_ln();
+  print_int(xs[2]);
+  print_ln();
+  print_int(xs[3]);
+  print_ln();
 }

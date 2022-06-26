@@ -121,6 +121,8 @@ pub enum TypeCheckError {
     AssignmentToImmutable(Span),
     MutablePointerToImmutableVariable(Span),
     DerefNonPointer(Type, Span),
+    NotAnArray(Span),
+    InvalidArrayIndex(Span),
 }
 
 impl TypeCheckError {
@@ -319,6 +321,12 @@ impl TypeCheckError {
                 .with_message("cannot dereference value of non-pointer type")
                 .with_labels(vec![Label::primary(span.source.0, span)
                     .with_message(format!("value has type `{}`", ttype.to_str()))]),
+            Self::NotAnArray(span) => Diagnostic::error()
+                .with_message("expression is not an array")
+                .with_labels(vec![Label::primary(span.source.0, span)]),
+            Self::InvalidArrayIndex(span) => Diagnostic::error()
+                .with_message("invalid index for array")
+                .with_labels(vec![Label::primary(span.source.0, span)]),
         }
     }
 }
@@ -494,6 +502,14 @@ impl TypeCheckError {
                 "message": "cannot dereference value of non-pointer type",
                 "span": span.json(),
             }),
+            Self::NotAnArray(span) => json!({
+                "message": "expression is not an array",
+                "span": span.json(),
+            }),
+            Self::InvalidArrayIndex(span) => json!({
+                "message": "invalid index for array",
+                "span": span.json(),
+            }),
         }
     }
 }
@@ -535,6 +551,13 @@ pub struct CheckedFieldAccess {
 }
 
 #[derive(Debug)]
+pub struct CheckedArrayIndex {
+    pub array: Box<CheckedExpression>,
+    pub index: Box<CheckedExpression>,
+    pub ttype: Type,
+}
+
+#[derive(Debug)]
 pub struct CheckedPointerTo {
     pub inner: Box<CheckedExpression>,
     pub ttype: Type,
@@ -564,6 +587,7 @@ pub enum CheckedExpression {
         Type,
     ),
     FieldAccess(CheckedFieldAccess, Struct, Type),
+    ArrayIndex(CheckedArrayIndex),
     Assignment(Box<CheckedExpression>, Box<CheckedExpression>),
     PointerTo(CheckedPointerTo),
     Deref(CheckedDeref),
@@ -585,6 +609,7 @@ impl CheckedExpression {
             Self::CompareOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
             Self::MathOp(_lhs, _rhs, _op, ttype) => ttype.clone(),
             Self::FieldAccess(_field_access, _struct, ttype) => ttype.clone(),
+            Self::ArrayIndex(array_index) => array_index.ttype.clone(),
             Self::Assignment(_lhs, _rhs) => Type::Unit,
             Self::PointerTo(pointer_to) => pointer_to.ttype.clone(),
             Self::Deref(deref) => deref.ttype.clone(),
@@ -1460,6 +1485,31 @@ fn typecheck_expression(
                     r#struct,
                     ttype,
                 ),
+                errors,
+            )
+        }
+        ParsedExpression::ArrayIndex(array_index) => {
+            let (checked_array, mut errors) = typecheck_expression(context, &array_index.array);
+            let (checked_index, mut errs) = typecheck_expression(context, &array_index.index);
+            errors.append(&mut errs);
+
+            let element_type = if let Type::Array(element_type, _) = checked_array.ttype() {
+                *element_type
+            } else {
+                errors.push(TypeCheckError::NotAnArray(array_index.array.span()));
+                Type::Incomplete
+            };
+
+            if !checked_index.ttype().matches(&Type::Int) {
+                errors.push(TypeCheckError::InvalidArrayIndex(array_index.index.span()));
+            }
+
+            (
+                CheckedExpression::ArrayIndex(CheckedArrayIndex {
+                    array: Box::new(checked_array),
+                    index: Box::new(checked_index),
+                    ttype: element_type,
+                }),
                 errors,
             )
         }

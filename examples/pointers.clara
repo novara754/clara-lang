@@ -39,4 +39,20 @@ fn main() {
   birthday(->mut bob);
   print_int(bob.age);
   print_ln();
+
+  let zs = [9, 8, 6];
+  print_str("zs:");
+  print_ln();
+  print_str("  ");
+  for z in zs {
+    print_int(z);
+    print_str(" ");
+  }
+  print_str("->");
+  inc(->mut zs[2]);
+  for z in zs {
+    print_str(" ");
+    print_int(z);
+  }
+  print_ln();
 }

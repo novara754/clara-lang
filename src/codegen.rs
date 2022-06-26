@@ -12,7 +12,8 @@ use llvm_sys as llvm;
 use crate::{
     parser::{CompareOperation, MathOperation},
     typechecker::{
-        CheckedBlock, CheckedExpression, CheckedLiteral, CheckedProgram, CheckedStatement, Type,
+        CheckedBlock, CheckedExpression, CheckedFieldAccess, CheckedLiteral, CheckedProgram,
+        CheckedStatement, Type,
     },
 };
 
@@ -633,6 +634,32 @@ unsafe fn emit_expression(
                     llvm::core::LLVMBuildLoad(ctx.builder, field_ptr, c_str!(b""))
                 }
                 ExprEmitAs::LValue => return Ok(field_ptr),
+            }
+        }
+        CheckedExpression::ArrayIndex(array_index) => {
+            let index = emit_expression(ctx, &array_index.index, ExprEmitAs::RValue)?;
+            let array = emit_expression(ctx, &array_index.array, ExprEmitAs::LValue)?;
+            let array_ptr = llvm::core::LLVMBuildBitCast(
+                ctx.builder,
+                array,
+                type_to_llvm(
+                    ctx,
+                    &Type::Pointer(Box::new(array_index.ttype.clone()), false),
+                )?,
+                c_str!(b""),
+            );
+            let element_ptr = llvm::core::LLVMBuildGEP(
+                ctx.builder,
+                array_ptr,
+                [index].as_mut_ptr(),
+                1,
+                c_str!(b""),
+            );
+            match emit_as {
+                ExprEmitAs::RValue => {
+                    llvm::core::LLVMBuildLoad(ctx.builder, element_ptr, c_str!(b""))
+                }
+                ExprEmitAs::LValue => return Ok(element_ptr),
             }
         }
         CheckedExpression::Assignment(lhs, rhs) => {

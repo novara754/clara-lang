@@ -122,6 +122,12 @@ pub struct ParsedFieldAccess {
 }
 
 #[derive(Debug, Clone)]
+pub struct ParsedArrayIndex {
+    pub index: Box<ParsedExpression>,
+    pub array: Box<ParsedExpression>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ParsedPointerTo {
     pub pointer_span: Span,
     pub inner: Box<ParsedExpression>,
@@ -146,6 +152,7 @@ pub enum ParsedExpression {
     ),
     MathOp(Box<ParsedExpression>, Box<ParsedExpression>, MathOperation),
     FieldAccess(ParsedFieldAccess),
+    ArrayIndex(ParsedArrayIndex),
     Assignment(Box<ParsedExpression>, Box<ParsedExpression>),
     PointerTo(ParsedPointerTo),
     Deref(ParsedDeref),
@@ -166,6 +173,7 @@ impl Spanned for ParsedExpression {
             Self::CompareOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
             Self::MathOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
             Self::FieldAccess(field_access) => field_access.span,
+            Self::ArrayIndex(array_index) => array_index.array.span().to(array_index.index.span()),
             Self::Assignment(lhs, rhs) => lhs.span().to(rhs.span()),
             Self::PointerTo(pointer_to) => pointer_to.pointer_span.to(pointer_to.inner.span()),
             Self::Deref(deref) => deref.star_span.to(deref.inner.span()),
@@ -1140,6 +1148,26 @@ fn parse_term(
             field_name,
             field_name_span,
             span,
+        })
+    } else {
+        expr
+    };
+
+    let expr = if let Some(Token {
+        kind: TokenKind::OBracket,
+        ..
+    }) = tokens.get(*idx)
+    {
+        *idx += 1; // Consume `[` token
+
+        let (index, mut errs) = parse_expression(tokens, idx, restriction)?;
+        errors.append(&mut errs);
+
+        expect!(&mut errors, tokens, idx, TokenKind::CBracket);
+
+        ParsedExpression::ArrayIndex(ParsedArrayIndex {
+            index: Box::new(index),
+            array: Box::new(expr),
         })
     } else {
         expr
