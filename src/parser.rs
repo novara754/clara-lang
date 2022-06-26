@@ -165,7 +165,7 @@ impl Spanned for ParsedExpression {
             Self::Variable(_, span) => *span,
             Self::CompareOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
             Self::MathOp(lhs, rhs, _) => lhs.span().to(rhs.span()),
-            ParsedExpression::FieldAccess(field_access) => field_access.span,
+            Self::FieldAccess(field_access) => field_access.span,
             Self::Assignment(lhs, rhs) => lhs.span().to(rhs.span()),
             Self::PointerTo(pointer_to) => pointer_to.pointer_span.to(pointer_to.inner.span()),
             Self::Deref(deref) => deref.star_span.to(deref.inner.span()),
