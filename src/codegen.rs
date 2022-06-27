@@ -12,8 +12,7 @@ use llvm_sys as llvm;
 use crate::{
     parser::{CompareOperation, MathOperation},
     typechecker::{
-        CheckedBlock, CheckedExpression, CheckedFieldAccess, CheckedLiteral, CheckedProgram,
-        CheckedStatement, Type,
+        CheckedBlock, CheckedExpression, CheckedLiteral, CheckedProgram, CheckedStatement, Type,
     },
 };
 
