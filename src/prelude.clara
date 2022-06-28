@@ -1,0 +1,4 @@
+extern fn print_int(x: int);
+extern fn print_str(s: ->c_char);
+extern fn print_ln();
+extern fn puts(s: ->c_char);

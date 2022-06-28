@@ -1,5 +1,3 @@
-extern fn puts(s: ->c_char);
-
 struct Person {
   name: ->c_char,
   age: int,

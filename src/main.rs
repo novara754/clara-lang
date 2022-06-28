@@ -35,6 +35,8 @@ fn main() {
         )
     };
 
+    let source = format!("{}{}", include_str!("./prelude.clara"), source);
+
     let diagnostics_writer = codespan_reporting::term::termcolor::StandardStream::stderr(
         codespan_reporting::term::termcolor::ColorChoice::Always,
     );

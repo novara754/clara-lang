@@ -1,11 +1,6 @@
-extern fn print_str(s: ->c_char);
-extern fn print_int(n: int);
-extern fn print_ln();
-
 struct Person {
   age: int,
 }
-
 
 fn inc(n: ->mut int) {
   *n = *n + 1;

@@ -1,5 +1,3 @@
-extern fn puts(msg: ->c_char);
-
 fn main() {
   puts("hello, world!");
 }

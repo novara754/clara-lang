@@ -1,5 +1,3 @@
-extern fn puts(s: ->c_char);
-
 fn add(x: int, y: int): int {
   return x + y;
 }
