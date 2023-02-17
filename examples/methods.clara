@@ -1,0 +1,20 @@
+struct Person {
+  age: int,
+}
+
+impl Person {
+  fn birthday(->mut self) {
+
+  }
+}
+
+fn main() {
+  let person = Person {
+    age: 24,
+  };
+
+  person.birthday();
+
+  print_int(person.age);
+  print_ln();
+}

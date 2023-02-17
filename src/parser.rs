@@ -81,6 +81,19 @@ pub struct ParsedStructLiteral {
     pub span: Span,
 }
 
+#[derive(Debug)]
+pub enum FunctionMode {
+    Associated,
+    Freestanding,
+}
+
+#[derive(Debug)]
+pub struct ParsedImplBlock {
+    pub typename: String,
+    pub typename_span: Span,
+    pub methods: Vec<ParsedFunction>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ParsedArrayLiteral {
     pub elements: Vec<ParsedExpression>,
@@ -262,6 +275,7 @@ pub enum ParsedStruct {
 #[derive(Debug)]
 pub struct ParsedProgram {
     pub structs: Vec<ParsedStruct>,
+    pub impl_blocks: Vec<ParsedImplBlock>,
     pub extern_functions: Vec<ParsedExternFunction>,
     pub functions: Vec<ParsedFunction>,
 }
@@ -301,6 +315,7 @@ pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<P
     let mut errors = vec![];
     let mut program = ParsedProgram {
         structs: vec![],
+        impl_blocks: vec![],
         extern_functions: vec![],
         functions: vec![],
     };
@@ -341,6 +356,14 @@ pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<P
                     program.extern_functions.push(fun);
                     errors.append(&mut errs);
                 }
+                Token {
+                    kind: TokenKind::Impl,
+                    ..
+                } => {
+                    let (impl_block, mut errs) = parse_impl_block(tokens, idx)?;
+                    program.impl_blocks.push(impl_block);
+                    errors.append(&mut errs);
+                }
                 _ => {
                     errors.push(ParseError::UnexpectedToken(token.span));
                     *idx += 1;
@@ -358,6 +381,44 @@ pub fn parse_program(tokens: &[Token], idx: &mut usize) -> (ParsedProgram, Vec<P
     }
 
     (program, errors)
+}
+
+fn parse_impl_block(
+    tokens: &[Token],
+    idx: &mut usize,
+) -> Option<(ParsedImplBlock, Vec<ParseError>)> {
+    let mut errors = vec![];
+
+    expect!(&mut errors, tokens, idx, TokenKind::Impl);
+
+    let (typename, typename_span, mut errs) = parse_name(tokens, idx)?;
+    errors.append(&mut errs);
+
+    expect!(&mut errors, tokens, idx, TokenKind::OBrace);
+
+    let mut methods = vec![];
+    while matches!(
+        tokens.get(*idx),
+        Some(Token {
+            kind: TokenKind::Fn,
+            ..
+        })
+    ) {
+        let (fun, mut errs) = parse_function(tokens, idx, FunctionMode::Associated)?;
+        methods.push(fun);
+        errors.append(&mut errs);
+    }
+
+    recover_at_token!(&mut errors, tokens, idx, TokenKind::CBrace);
+
+    Some((
+        ParsedImplBlock {
+            typename,
+            typename_span,
+            methods,
+        },
+        errors,
+    ))
 }
 
 fn parse_struct(tokens: &[Token], idx: &mut usize) -> Option<(ParsedStruct, Vec<ParseError>)> {
@@ -496,7 +557,11 @@ fn parse_extern_function(
     Some((fun, errors))
 }
 
-fn parse_function(tokens: &[Token], idx: &mut usize) -> Option<(ParsedFunction, Vec<ParseError>)> {
+fn parse_function(
+    tokens: &[Token],
+    idx: &mut usize,
+    parsing_mode: FunctionMode,
+) -> Option<(ParsedFunction, Vec<ParseError>)> {
     let mut errors = vec![];
 
     expect!(&mut errors, tokens, idx, TokenKind::Fn);
@@ -507,6 +572,7 @@ fn parse_function(tokens: &[Token], idx: &mut usize) -> Option<(ParsedFunction, 
     expect!(&mut errors, tokens, idx, TokenKind::OParen);
 
     let mut parameters = vec![];
+
     while *idx < tokens.len()
         && !matches!(
             tokens.get(*idx)?,
@@ -616,6 +682,29 @@ fn parse_parameter(
     idx: &mut usize,
 ) -> Option<(FunctionParameter, Vec<ParseError>)> {
     let mut errors = vec![];
+
+    if matches!(
+        tokens.get(*idx),
+        Some(Token {
+            kind: TokenKind::RightArrow,
+            ..
+        })
+    ) {
+        *idx += 1; // Consume `->` token
+
+        let is_mut = if matches!(
+            tokens.get(*idx),
+            Some(Token {
+                kind: TokenKind::Mut,
+                ..
+            })
+        ) {
+            *idx += 1; // Consume `mut` token
+            true
+        } else {
+            false
+        };
+    }
 
     let (name, name_span, mut errs) = parse_name(tokens, idx)?;
     errors.append(&mut errs);
